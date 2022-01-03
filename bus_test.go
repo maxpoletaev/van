@@ -27,12 +27,12 @@ func assertPanic(t *testing.T, p interface{}, message string) {
 }
 
 func TestBus_Provide(t *testing.T) {
-	bus := New()
+	bus := New().(*busImpl)
 	bus.Provide(func() service {
 		return &serviceImpl{}
 	})
-	if len(bus.providers) != 1 {
-		t.Errorf("expected 1 provider, got %d", len(bus.providers))
+	if len(bus.providers) != 2 {
+		t.Errorf("expected 2 providers, got %d", len(bus.providers))
 	}
 }
 
@@ -71,7 +71,7 @@ func TestBus_ProvideFails(t *testing.T) {
 }
 
 func TestBus_Handle(t *testing.T) {
-	bus := New()
+	bus := New().(*busImpl)
 	type cmd struct{}
 	bus.Handle(cmd{}, func(ctx context.Context, cmd *cmd) error {
 		return nil
