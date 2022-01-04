@@ -65,7 +65,7 @@ ctx := context.Background()
 bus.EmitEvent(ctx, event)
 ```
 
-Although event processing is synchronous, there are done and error channels that you can use to wait for the event to be processed, therefore converting it to a synchronous call:
+Although event processing is asynchronous, there are done and error channels that you can use to wait for the event to be processed, therefore converting it to a synchronous call:
 
 ```go
 done, errchan := bus.EmitEvent(ctx, event)
