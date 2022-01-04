@@ -1,4 +1,4 @@
-module github.com/maxpoletaev/go-van
+module github.com/maxpoletaev/van
 
 go 1.17
 
