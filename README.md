@@ -1,4 +1,4 @@
-# Van
+# Van 🚐
 
 (Yet another?) reflection-based in-app command/event bus implementation with dependency-injection. Heavily inspired by https://github.com/uber-go/dig and https://watermill.io/docs/cqrs/.
 
