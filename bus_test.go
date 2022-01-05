@@ -51,6 +51,22 @@ func TestProvide(t *testing.T) {
 	assert.Len(t, bus.providers, 2)
 }
 
+func TestProvideSingleton(t *testing.T) {
+	bus := New().(*busImpl)
+	bus.ProvideSingleton(func() GetIntService {
+		return &GetIntServiceImpl{}
+	})
+	assert.Len(t, bus.providers, 2)
+
+	var opts providerOpts
+	for k := range bus.providers {
+		opts = bus.providers[k]
+		break
+	}
+
+	assert.True(t, opts.singleton)
+}
+
 func TestProvide_WithDeps(t *testing.T) {
 	bus := New().(*busImpl)
 
@@ -378,4 +394,54 @@ func TestEmitEvent_OneListenerFails(t *testing.T) {
 	assert.Equal(t, eventTriggered, 1)
 	assert.Len(t, errchan, 1)
 	assert.Equal(t, listenerErr, <-errchan)
+}
+
+func TestResolve_Van(t *testing.T) {
+	bus := New()
+	bus.Resolve(func(b Van) error {
+		assert.Equal(t, bus, b)
+		return nil
+	})
+}
+
+func TestResolveTransitive(t *testing.T) {
+	bus := New()
+
+	var providerExecuted, handlerExecuted int
+	bus.Provide(func() GetIntService {
+		providerExecuted++
+		return &GetIntServiceImpl{}
+	})
+
+	for i := 0; i < 5; i++ {
+		bus.Resolve(func(s GetIntService) error {
+			assert.NotNil(t, s)
+			handlerExecuted++
+			return nil
+		})
+	}
+
+	assert.Equal(t, 5, providerExecuted)
+	assert.Equal(t, 5, handlerExecuted)
+}
+
+func TestResolveSingleton(t *testing.T) {
+	bus := New()
+
+	var providerExecuted, handlerExecuted int
+	bus.ProvideSingleton(func() GetIntService {
+		providerExecuted++
+		return &GetIntServiceImpl{}
+	})
+
+	for i := 0; i < 5; i++ {
+		bus.Resolve(func(s GetIntService) error {
+			assert.NotNil(t, s)
+			handlerExecuted++
+			return nil
+		})
+	}
+
+	assert.Equal(t, 1, providerExecuted)
+	assert.Equal(t, 5, handlerExecuted)
 }

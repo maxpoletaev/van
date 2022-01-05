@@ -19,6 +19,7 @@ ALPHA. There might be breaking API changes in future versions.
 type PrintHelloCommand struct {
 	Name string
 }
+
 func PrintHello(ctx context.Context, cmd *PrintHelloCommand) error {
 	fmt.Printf("Hello, %s!\n", cmd.Name)
 }
@@ -28,8 +29,7 @@ bus.HandleCommand(PrintHelloCommand{}, PrintHello)
 
 // Send command to the bus
 cmd := &PrintHelloCommand{Name: "Harry"}
-ctx := context.Background()
-err := bus.InvokeCommand(ctx, cmd)
+err := bus.InvokeCommand(context.Background(), cmd)
 if err != nil {
 	panic(err)
 }
@@ -55,14 +55,15 @@ func OrderCreated(ctx *context.Context, event OrderCreatedEvent) error {
 	return nil
 }
 
+// Subscribe to event
 bus.ListenEvent(OrderCreatedEvent{}, OrderCreated)
 
+// Send event to the bus
 event := OrderCreatedEvent{
 	OrderID:   "ord-134",
 	Timestamp: time.Now().Unix(),
 }
-ctx := context.Background()
-bus.EmitEvent(ctx, event)
+bus.EmitEvent(context.Background(), event)
 ```
 
 Although event processing is asynchronous, there are done and error channels that you can use to wait for the event to be processed, therefore converting it to a synchronous call:
@@ -158,7 +159,7 @@ I mean, it is not extremely bad, given the fact that Go still uses lots of dynam
 
 ## How do I return a value from a command handler?
 
-Although there are no return values, this can be easily handled with the command type itself:
+There are no return values, but this can be handled with the command type itself:
 
 ```go
 type SumCommand struct {
@@ -171,6 +172,14 @@ func Sum(ctx context.Context, cmd *SumCommand) error {
 	cmd.Result = cmd.A + cmd.B
 	return nil
 }
+
+cmd := &SumCommand{A: 1, B: 2}
+err := bus.InvokeCommand(context.Background(), cmd)
+if err != nil {
+	panic(err)
+}
+
+println(cmd.Result) // 3
 ```
 
 ## How do I create a parametrized provider?
@@ -216,9 +225,8 @@ bus.Provide(func() Logger2 { logging.NewLogger() })
 There’s a provider already registered for the Van type:
 
 ```go
-func CreateUser(ctx context.Context, cmd *CreateUserCommand, bus van.Van, users UserRepository) error {
-	user := &User{Username: cmd.Username}
-	users.Save(user)
+func CreateUser(ctx context.Context, cmd *CreateUserCommand, bus van.Van) error {
+	// ...
 	bus.EmitEvent(ctx, UserCreatedEvent{User: user})
 	return nil
 }

@@ -24,13 +24,36 @@ type benchCommand struct {
 
 func (s *serviceImpl) Run() int { return s.ret }
 
-func BenchmarkInvokeCommand(b *testing.B) {
+func BenchmarkInvoke(b *testing.B) {
 	bus := New()
 	bus.Provide(func() serviceA { return &serviceImpl{ret: 1} })
 	bus.Provide(func(a serviceA) serviceB { return &serviceImpl{ret: 2} })
 	bus.Provide(func(a serviceA, b serviceB) serviceC { return &serviceImpl{ret: 3} })
 	bus.Provide(func(a serviceA, b serviceB, c serviceC) serviceD { return &serviceImpl{ret: 4} })
 	bus.Provide(func(a serviceA, b serviceB, c serviceC, d serviceD) serviceE { return &serviceImpl{ret: 5} })
+	bus.HandleCommand(benchCommand{}, func(ctx context.Context, cmd *benchCommand, a serviceA, b serviceB, c serviceC, d serviceD, e serviceE) error {
+		return nil
+	})
+
+	b.ResetTimer()
+	var err error
+
+	ctx := context.Background()
+	for i := 0; i < b.N; i++ {
+		err = bus.InvokeCommand(ctx, &benchCommand{val: i})
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkInvoke_Singletons(b *testing.B) {
+	bus := New()
+	bus.ProvideSingleton(func() serviceA { return &serviceImpl{ret: 1} })
+	bus.ProvideSingleton(func(a serviceA) serviceB { return &serviceImpl{ret: 2} })
+	bus.ProvideSingleton(func(a serviceA, b serviceB) serviceC { return &serviceImpl{ret: 3} })
+	bus.ProvideSingleton(func(a serviceA, b serviceB, c serviceC) serviceD { return &serviceImpl{ret: 4} })
+	bus.ProvideSingleton(func(a serviceA, b serviceB, c serviceC, d serviceD) serviceE { return &serviceImpl{ret: 5} })
 	bus.HandleCommand(benchCommand{}, func(ctx context.Context, cmd *benchCommand, a serviceA, b serviceB, c serviceC, d serviceD, e serviceE) error {
 		return nil
 	})

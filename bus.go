@@ -10,32 +10,42 @@ import (
 type providerFunc interface{} // func(deps ...interface{}) interface{}
 type handlerFunc interface{}  // func(ctx context.Context, cmd interface{}, deps ...interface{}) error
 
+type providerOpts struct {
+	fn        providerFunc
+	singleton bool
+}
+
 type Van interface {
 	Provide(provider providerFunc)
+	ProvideSingleton(provider providerFunc)
 	HandleCommand(cmd interface{}, handler handlerFunc)
 	InvokeCommand(ctx context.Context, cmd interface{}) error
 	ListenEvent(event interface{}, listeners ...handlerFunc)
 	EmitEvent(ctx context.Context, event interface{}) (chan struct{}, chan error)
-	Exec(fn interface{}) error
+	Resolve(fn interface{}) error
 }
 
 type busImpl struct {
-	providers map[reflect.Type]providerFunc
-	handlers  map[reflect.Type]handlerFunc
-	listeners map[reflect.Type][]handlerFunc
+	providers   map[reflect.Type]providerOpts
+	handlers    map[reflect.Type]handlerFunc
+	listeners   map[reflect.Type][]handlerFunc
+	instances   map[reflect.Type]interface{}
+	instancesMu sync.RWMutex
 }
 
 func New() Van {
 	b := &busImpl{}
-	b.providers = make(map[reflect.Type]providerFunc)
+	b.providers = make(map[reflect.Type]providerOpts)
 
 	// register provider for Bus type so that we can access it from handlers
-	b.providers[reflect.TypeOf((*Van)(nil)).Elem()] = func() Van {
-		return b
+	b.providers[reflect.TypeOf((*Van)(nil)).Elem()] = providerOpts{
+		fn:        func() Van { return b },
+		singleton: true,
 	}
 
 	b.handlers = make(map[reflect.Type]handlerFunc)
 	b.listeners = make(map[reflect.Type][]handlerFunc)
+	b.instances = make(map[reflect.Type]interface{})
 	return b
 }
 
@@ -46,7 +56,20 @@ func (b *busImpl) Provide(provider providerFunc) {
 	}
 
 	retType := providerType.Out(0)
-	b.providers[retType] = provider
+	b.providers[retType] = providerOpts{fn: provider}
+}
+
+func (b *busImpl) ProvideSingleton(provider providerFunc) {
+	providerType := reflect.TypeOf(provider)
+	if err := b.validateProviderType(providerType); err != nil {
+		panic(err)
+	}
+
+	retType := providerType.Out(0)
+	b.providers[retType] = providerOpts{
+		fn:        provider,
+		singleton: true,
+	}
 }
 
 func (b *busImpl) HandleCommand(cmd interface{}, handler handlerFunc) {
@@ -189,16 +212,18 @@ func (b *busImpl) EmitEvent(ctx context.Context, event interface{}) (done chan s
 	return
 }
 
-func (b *busImpl) Exec(fn interface{}) error {
+func (b *busImpl) Resolve(fn interface{}) error {
 	funcType := reflect.TypeOf(fn)
 	switch {
+	case funcType.Kind() != reflect.Func:
+		return ErrInvalidType.new("fn should be a function, got " + funcType.String())
 	case funcType.NumOut() != 1:
-		return fmt.Errorf("must have one return value")
+		return ErrInvalidType.new("fn must have one return value, got " + fmt.Sprint(funcType.NumOut()))
 	case !isTypeError(funcType.Out(0)):
-		return fmt.Errorf("return value must be an error")
+		return ErrInvalidType.new("return value must be an error, got" + funcType.Out(0).String())
 	}
 
-	for i := 0; i <= funcType.NumIn(); i++ {
+	for i := 0; i < funcType.NumIn(); i++ {
 		argType := funcType.In(i)
 		if argType.Kind() != reflect.Interface {
 			return fmt.Errorf("function argument %d is not an interface", i)
@@ -226,9 +251,16 @@ func (b *busImpl) resolve(funcValue reflect.Value, args []reflect.Value) error {
 			continue
 		}
 
+		if _, ok := b.instances[argType]; ok {
+			b.instancesMu.RLock()
+			args[i] = reflect.ValueOf(b.instances[argType])
+			b.instancesMu.RUnlock()
+			continue
+		}
+
 		provider := b.providers[argType]
-		providerType := reflect.TypeOf(provider)
-		providerValue := reflect.ValueOf(provider)
+		providerType := reflect.TypeOf(provider.fn)
+		providerValue := reflect.ValueOf(provider.fn)
 
 		nextArgs := make([]reflect.Value, providerType.NumIn())
 		err := b.resolve(providerValue, nextArgs)
@@ -236,8 +268,16 @@ func (b *busImpl) resolve(funcValue reflect.Value, args []reflect.Value) error {
 			return err
 		}
 
-		args[i] = providerValue.Call(nextArgs)[0]
+		instance := providerValue.Call(nextArgs)[0]
+		if provider.singleton {
+			b.instancesMu.Lock()
+			b.instances[argType] = instance.Interface()
+			b.instancesMu.Unlock()
+		}
+
+		args[i] = instance
 	}
+
 	return nil
 }
 
