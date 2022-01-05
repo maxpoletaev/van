@@ -75,7 +75,8 @@ func TestProvide_WithDeps(t *testing.T) {
 		return setIntService
 	})
 
-	bus.Provide(func(s SetIntService) GetIntService {
+	bus.Provide(func(b Van, s SetIntService) GetIntService {
+		assert.Equal(t, bus, b)
 		assert.Equal(t, setIntService, s)
 		return &GetIntServiceImpl{}
 	})
@@ -139,7 +140,7 @@ func TestBus_ProvideFails(t *testing.T) {
 
 func TestHandleCommand(t *testing.T) {
 	bus := New().(*busImpl)
-	bus.HandleCommand(Command{}, func(ctx context.Context, cmd *Command) error {
+	bus.HandleCommand(Command{}, func(ctx context.Context, cmd *Command, bus Van) error {
 		return nil
 	})
 	assert.Len(t, bus.handlers, 1)
@@ -290,7 +291,8 @@ func TestInvokeCommandFails(t *testing.T) {
 
 func TestListenEvent(t *testing.T) {
 	bus := New().(*busImpl)
-	handler := func(ctx context.Context, event Event) error {
+	handler := func(ctx context.Context, event Event, b Van) error {
+		assert.NotNil(t, b)
 		return nil
 	}
 	bus.ListenEvent(Event{}, handler)

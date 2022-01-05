@@ -301,7 +301,7 @@ func (b *busImpl) validateProviderType(t reflect.Type) error {
 		if argType.Kind() != reflect.Interface {
 			return ErrInvalidType.new(fmt.Sprintf("provider's argument %d must be an interface, got %s", i, argType.String()))
 		}
-		if _, ok := b.providers[argType]; !ok {
+		if !b.hasProvider(argType) {
 			return ErrProviderNotFound.new("no providers registered for type " + argType.String())
 		}
 	}
@@ -336,7 +336,7 @@ func (b *busImpl) validateHandlerType(t reflect.Type) error {
 		if argType.Kind() != reflect.Interface {
 			return ErrInvalidType.new(fmt.Sprintf("handler's argument %d must be an interface, got %s", i, argType.String()))
 		}
-		if _, ok := b.providers[argType]; !ok {
+		if !b.hasProvider(argType) {
 			return ErrProviderNotFound.new("no providers registered for type " + argType.String())
 		}
 	}
@@ -363,12 +363,19 @@ func (b *busImpl) validateListener(t reflect.Type) error {
 		if argType.Kind() != reflect.Interface {
 			return ErrInvalidType.new(fmt.Sprintf("handler's argument %d must be an interface, got %s", i, argType.String()))
 		}
-		if _, ok := b.providers[argType]; !ok {
+		if !b.hasProvider(argType) {
 			return ErrProviderNotFound.new("no providers registered for type " + argType.String())
 		}
 	}
 
 	return nil
+}
+
+func (b *busImpl) hasProvider(t reflect.Type) bool {
+	if _, ok := b.providers[t]; ok || t == b.selfType {
+		return true
+	}
+	return false
 }
 
 func isTypeStructPointer(t reflect.Type) bool {
