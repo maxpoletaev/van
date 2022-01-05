@@ -80,27 +80,19 @@ case err := <-errchan:
 ## Providers
 
  * Provider is essentially a constructor of an arbitrary type.
- * If a provider cannot provide value, it should panic.
+ * Providers can depend on other providers.
+ * Proviers are executed every time the dependecy is requested, they are not singletons.
 
 ```go
-type Logger interface {
-	Print(string)
-}
 bus.Provide(func() Logger {
-	return &SimpleLogger{}
+	return &logging.DumbStdoutLogger{}
 })
-```
 
-Providers can also have dependecies:
-
-```go
-type UserRepository interface {
-	Get(id int64) (*User, error)
-}
 bus.Provide(func(logger Logger) UserRepository {
-	return NewUserReponsitory(logger)
+	return &PersistentUserRepository{Logger: logger}
 })
 ```
+
 
 ## Handlers
 
@@ -121,18 +113,17 @@ eventHandler := func(ctx context.Context, event Event) error {
 
 ## Is it slow?
 
-Well, yeah... Although it tries to do most of the checks during the handler registration, it’s still slow as hell due to reflection magic under the hood used for dynamically-constructed function arguments.
+Well, yeah... Although it tries to do most of the checks during the handler registration, it’s still slow as hell due to reflection magic under the hood used for dynamically-constructed function arguments, the most painful of which is `reflect.Value.Call()`
 
 The following benchmark shows that simple dynamic function calls in Go are about 1000 times slower than static function calls, and this is even without the dependency-injection overhead involved.
 
 ```
 goos: darwin
 goarch: amd64
-pkg: github.com/maxpoletaev/gobus
+pkg: github.com/maxpoletaev/van
 cpu: Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz
-BenchmarkSqrtNative-12        	 1000000000	       0.2496 ns/op	       0 B/op	       0 allocs/op
-BenchmarkSqrtReflection-12    	 4759965	       253.1 ns/op	      48 B/op	       3 allocs/op
-PASS
+BenchmarkFuncCallStatic-12        	1000000000	       0.2531 ns/op
+BenchmarkFuncCallReflection-12    	4533655	           265.4 ns/op
 ```
 
 <details>
@@ -222,10 +213,10 @@ bus.Provide(func() Logger2 { logging.NewLogger() })
 
 ## How do I access the bus inside a handler?
 
-There’s a provider already registered for the Bus type:
+There’s a provider already registered for the Van type:
 
 ```go
-func CreateUser(ctx context.Context, cmd *CreateUserCommand, bus van.Bus, users UserRepository) error {
+func CreateUser(ctx context.Context, cmd *CreateUserCommand, bus van.Van, users UserRepository) error {
 	user := &User{Username: cmd.Username}
 	users.Save(user)
 	bus.EmitEvent(ctx, UserCreatedEvent{User: user})

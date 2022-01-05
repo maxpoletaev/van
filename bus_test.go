@@ -33,6 +33,16 @@ func (s *SetIntSevriceImpl) Set(i int) {}
 
 type UnknownService interface{}
 
+func panicToError(fn func()) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = r.(error)
+		}
+	}()
+	fn()
+	return nil
+}
+
 func TestProvide(t *testing.T) {
 	bus := New().(*busImpl)
 	bus.Provide(func() GetIntService {
@@ -59,142 +69,152 @@ func TestProvide_WithDeps(t *testing.T) {
 
 func TestBus_ProvideFails(t *testing.T) {
 	tests := map[string]struct {
-		provider  interface{}
-		wantPanic string
+		provider   interface{}
+		wantErr    error
+		wantErrMsg string
 	}{
 		"not a func": {
-			provider:  1,
-			wantPanic: "provider must be a function",
+			provider:   1,
+			wantErr:    ErrInvalidType,
+			wantErrMsg: "provider must be a function, got int",
 		},
 		"no return value": {
-			provider:  func() {},
-			wantPanic: "provider must have one return value",
+			provider:   func() {},
+			wantErr:    ErrInvalidType,
+			wantErrMsg: "provider must have one return value, got 0",
 		},
 		"multiple return values": {
-			provider:  func() (int, int) { return 1, 2 },
-			wantPanic: "provider must have one return value",
+			provider:   func() (int, int) { return 1, 2 },
+			wantErr:    ErrInvalidType,
+			wantErrMsg: "provider must have one return value, got 2",
 		},
 		"return value not an interface": {
-			provider:  func() int { return 1 },
-			wantPanic: "provider's return value must be an interface",
+			provider:   func() int { return 1 },
+			wantErr:    ErrInvalidType,
+			wantErrMsg: "provider's return value must be an interface, got int",
 		},
 		"arg is not an interface": {
 			provider: func(int) GetIntService {
 				return &GetIntServiceImpl{}
 			},
-			wantPanic: "provider's argument 0 must be an interface",
+			wantErr:    ErrInvalidType,
+			wantErrMsg: "provider's argument 0 must be an interface, got int",
 		},
 		"unknown interface": {
 			provider: func(s SetIntService) GetIntService {
 				return &GetIntServiceImpl{}
 			},
-			wantPanic: "no providers registered for type van.SetIntService",
+			wantErr:    ErrProviderNotFound,
+			wantErrMsg: "no providers registered for type van.SetIntService",
 		},
 	}
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			bus := New()
-			assert.PanicsWithValue(t, tt.wantPanic, func() {
+			err := panicToError(func() {
 				bus.Provide(tt.provider)
 			})
+			assert.ErrorIs(t, err, tt.wantErr)
+			assert.Equal(t, tt.wantErrMsg, err.Error())
 		})
 	}
 }
 
-func TesHandleCommand(t *testing.T) {
+func TestHandleCommand(t *testing.T) {
 	bus := New().(*busImpl)
-	type cmd struct{}
-	bus.HandleCommand(cmd{}, func(ctx context.Context, cmd *cmd) error {
+	bus.HandleCommand(Command{}, func(ctx context.Context, cmd *Command) error {
 		return nil
 	})
 	assert.Len(t, bus.handlers, 1)
 }
 
-func TesHandleCommandFails(t *testing.T) {
+func TestHandleCommandFails(t *testing.T) {
 	tests := map[string]struct {
-		cmd       interface{}
-		handler   interface{}
-		wantPanic string
+		cmd        interface{}
+		handler    interface{}
+		wantErr    error
+		wantErrMsg string
 	}{
 		"msg not a struct": {
-			cmd:       1,
-			handler:   func() {},
-			wantPanic: "msg must be a struct",
+			cmd:        1,
+			handler:    func() {},
+			wantErr:    ErrInvalidType,
+			wantErrMsg: "msg must be a struct, got int",
 		},
 		"handler not a func": {
-			cmd:       struct{}{},
-			handler:   1,
-			wantPanic: "handler must be a function",
+			cmd:        struct{}{},
+			handler:    1,
+			wantErr:    ErrInvalidType,
+			wantErrMsg: "handler must be a function, got int",
 		},
 		"less than two args": {
-			cmd:       struct{}{},
-			handler:   func() error { return nil },
-			wantPanic: "handler must have at least 2 arguments",
+			cmd:        struct{}{},
+			handler:    func() error { return nil },
+			wantErr:    ErrInvalidType,
+			wantErrMsg: "handler must have at least 2 arguments, got 0",
 		},
 		"second arg is not a pointer": {
-			cmd:       struct{}{},
-			handler:   func(context.Context, int) error { return nil },
-			wantPanic: "handler's second argument must be a struct pointer",
+			cmd:        struct{}{},
+			handler:    func(context.Context, int) error { return nil },
+			wantErr:    ErrInvalidType,
+			wantErrMsg: "handler's second argument must be a struct pointer, got int",
 		},
-		"second arg is not a struct": {
-			cmd:       struct{}{},
-			handler:   func(context.Context, *int) error { return nil },
-			wantPanic: "handler's second argument must be a struct pointer",
+		"second arg is not a struct pointer": {
+			cmd:        struct{}{},
+			handler:    func(context.Context, *int) error { return nil },
+			wantErr:    ErrInvalidType,
+			wantErrMsg: "handler's second argument must be a struct pointer, got *int",
 		},
 		"no return values": {
-			cmd:       struct{}{},
-			handler:   func(ctx context.Context, msg *struct{}) {},
-			wantPanic: "handler must have one return value",
+			cmd:        struct{}{},
+			handler:    func(ctx context.Context, msg *struct{}) {},
+			wantErr:    ErrInvalidType,
+			wantErrMsg: "handler must have one return value, got 0",
 		},
 		"multiple return values": {
 			cmd: struct{}{},
 			handler: func(ctx context.Context, msg *struct{}) (error, error) {
 				return nil, nil
 			},
-			wantPanic: "handler must have one return value",
+			wantErr:    ErrInvalidType,
+			wantErrMsg: "handler must have one return value, got 2",
 		},
-		"return value not an error": {
+		"return type not an error": {
 			cmd: struct{}{},
 			handler: func(ctx context.Context, msg *struct{}) int {
 				return 0
 			},
-			wantPanic: "handler's return value must be an error",
+			wantErr:    ErrInvalidType,
+			wantErrMsg: "handler's return type must be error, got int",
 		},
 		"unknown interface": {
 			cmd: struct{}{},
 			handler: func(ctx context.Context, msg *struct{}, s SetIntService) error {
 				return nil
 			},
-			wantPanic: "no providers registered for type van.SetIntService",
+			wantErr:    ErrProviderNotFound,
+			wantErrMsg: "no providers registered for type van.SetIntService",
 		},
 		"command type mismatch": {
 			cmd: struct{}{},
 			handler: func(ctx context.Context, cmd *Command) error {
 				return nil
 			},
-			wantPanic: "command type mismatch",
+			wantErr:    ErrInvalidType,
+			wantErrMsg: "command type mismatch",
 		},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			bus := New()
-			assert.PanicsWithValue(t, tt.wantPanic, func() {
+			err := panicToError(func() {
 				bus.HandleCommand(tt.cmd, tt.handler)
 			})
+			assert.ErrorIs(t, err, tt.wantErr)
+			assert.Equal(t, tt.wantErrMsg, err.Error())
 		})
 	}
-}
-
-func TestHandleCommandFails_AlreadyRegistered(t *testing.T) {
-	bus := New()
-	handler := func(ctx context.Context, cmd *Command) error {
-		return nil
-	}
-	bus.HandleCommand(Command{}, handler)
-	assert.PanicsWithValue(t, "handler already registered for type van.Command", func() {
-		bus.HandleCommand(Command{}, handler)
-	})
 }
 
 func TestInvokeCommand(t *testing.T) {
@@ -222,23 +242,23 @@ func TestInvokeCommand(t *testing.T) {
 
 func TestInvokeCommandFails(t *testing.T) {
 	tests := map[string]struct {
-		cmd     interface{}
-		wantErr string
+		cmd        interface{}
+		wantErrMsg string
 	}{
 		"cmd is not a pointer": {
-			cmd:     struct{}{},
-			wantErr: "cmd must be a pointer to a struct",
+			cmd:        struct{}{},
+			wantErrMsg: "cmd must be a pointer to a struct",
 		},
 		"cmd is not a pointer to struct": {
 			cmd: func() *int {
 				v := 1
 				return &v
 			}(),
-			wantErr: "cmd must be a pointer to a struct",
+			wantErrMsg: "cmd must be a pointer to a struct",
 		},
 		"unregistered handler": {
-			cmd:     &Command{},
-			wantErr: "no handlers found for type van.Command",
+			cmd:        &Command{},
+			wantErrMsg: "no handlers found for type van.Command",
 		},
 	}
 
@@ -247,7 +267,7 @@ func TestInvokeCommandFails(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			err := bus.InvokeCommand(ctx, tt.cmd)
-			assert.Equal(t, tt.wantErr, err.Error())
+			assert.Equal(t, tt.wantErrMsg, err.Error())
 		})
 	}
 }
@@ -263,40 +283,42 @@ func TestListenEvent(t *testing.T) {
 
 func TestListenEvenFails(t *testing.T) {
 	tests := map[string]struct {
-		handler   interface{}
-		wantPanic string
+		handler    interface{}
+		wantErrMsg string
 	}{
 		"not a function": {
-			handler:   struct{}{},
-			wantPanic: "listener must be a function",
+			handler:    struct{}{},
+			wantErrMsg: "handler must be a function, got struct {}",
 		},
 		"not enough arguments": {
-			handler:   func() error { return nil },
-			wantPanic: "listener must have at least 2 arguments",
+			handler:    func() error { return nil },
+			wantErrMsg: "handler must have at least 2 arguments, got 0",
 		},
 		"first argument not a context": {
-			handler:   func(ctx struct{}, event Event) error { return nil },
-			wantPanic: "listener's first argument must be the context",
+			handler:    func(ctx struct{}, event Event) error { return nil },
+			wantErrMsg: "handler's first argument must be context.Context, got struct {}",
 		},
 		"second argument not a struct": {
-			handler:   func(ctx context.Context, event int) error { return nil },
-			wantPanic: "listener's second argument must be a struct",
+			handler:    func(ctx context.Context, event int) error { return nil },
+			wantErrMsg: "handler's second argument must be a struct, got int",
 		},
 		"dependency is not an interface": {
-			handler:   func(ctx context.Context, event Event, dep int) error { return nil },
-			wantPanic: "listener's argument 2 must be an interface",
+			handler:    func(ctx context.Context, event Event, dep int) error { return nil },
+			wantErrMsg: "handler's argument 2 must be an interface, got int",
 		},
 		"unknown provider": {
-			handler:   func(ctx context.Context, event Event, dep UnknownService) error { return nil },
-			wantPanic: "no providers registered for type van.UnknownService",
+			handler:    func(ctx context.Context, event Event, dep UnknownService) error { return nil },
+			wantErrMsg: "no providers registered for type van.UnknownService",
 		},
 	}
 	bus := New()
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			assert.PanicsWithValue(t, tt.wantPanic, func() {
+			err := panicToError(func() {
 				bus.ListenEvent(Event{}, tt.handler)
 			})
+			assert.Error(t, err)
+			assert.Equal(t, tt.wantErrMsg, err.Error())
 		})
 	}
 }
