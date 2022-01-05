@@ -12,4 +12,11 @@ test:  ## Run go tests
 
 .PHONY: bench
 bench:  ## Run benchmark
-	@go test -bench=. -run=^$ -benchmem -cpuprofile=cpu.pprof -memprofile=mem.pprof
+	go test -bench=. -run=^$$ -benchmem -cpuprofile=cpu.pprof -memprofile=mem.pprof
+
+.PHONY: benchcmp
+benchcmp:  ## Run benchmark and compare with the previous benchcmp run
+	[ -f bench.txt ] && mv bench.txt bench.old.txt || true
+	go test -bench=. -run=^$$ -benchmem -cpuprofile=cpu.pprof -memprofile=mem.pprof > bench.txt
+	@benchcmp bench.old.txt bench.txt
+

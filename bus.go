@@ -31,21 +31,16 @@ type busImpl struct {
 	listeners   map[reflect.Type][]handlerFunc
 	instances   map[reflect.Type]interface{}
 	instancesMu sync.RWMutex
+	selfType    reflect.Type
 }
 
 func New() Van {
 	b := &busImpl{}
 	b.providers = make(map[reflect.Type]providerOpts)
-
-	// register provider for Bus type so that we can access it from handlers
-	b.providers[reflect.TypeOf((*Van)(nil)).Elem()] = providerOpts{
-		fn:        func() Van { return b },
-		singleton: true,
-	}
-
 	b.handlers = make(map[reflect.Type]handlerFunc)
 	b.listeners = make(map[reflect.Type][]handlerFunc)
 	b.instances = make(map[reflect.Type]interface{})
+	b.selfType = reflect.TypeOf((*Van)(nil)).Elem()
 	return b
 }
 
@@ -245,12 +240,18 @@ func (b *busImpl) resolve(funcValue reflect.Value, args []reflect.Value) error {
 				continue
 			}
 		}
-
 		argType := funcT.In(i)
 		if argType.Kind() != reflect.Interface {
 			continue
 		}
 
+		// dependency is the bus itself
+		if argType == b.selfType {
+			args[i] = reflect.ValueOf(b)
+			continue
+		}
+
+		// dependency is a singleton
 		if _, ok := b.instances[argType]; ok {
 			b.instancesMu.RLock()
 			args[i] = reflect.ValueOf(b.instances[argType])

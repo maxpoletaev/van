@@ -1,1 +1,4 @@
+/*.test
 *.pprof
+bench.txt
+bench.old.txt

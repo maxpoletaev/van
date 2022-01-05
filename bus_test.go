@@ -48,7 +48,7 @@ func TestProvide(t *testing.T) {
 	bus.Provide(func() GetIntService {
 		return &GetIntServiceImpl{}
 	})
-	assert.Len(t, bus.providers, 2)
+	assert.Len(t, bus.providers, 1)
 }
 
 func TestProvideSingleton(t *testing.T) {
@@ -56,7 +56,7 @@ func TestProvideSingleton(t *testing.T) {
 	bus.ProvideSingleton(func() GetIntService {
 		return &GetIntServiceImpl{}
 	})
-	assert.Len(t, bus.providers, 2)
+	assert.Len(t, bus.providers, 1)
 
 	var opts providerOpts
 	for k := range bus.providers {
@@ -80,7 +80,7 @@ func TestProvide_WithDeps(t *testing.T) {
 		return &GetIntServiceImpl{}
 	})
 
-	assert.Len(t, bus.providers, 3)
+	assert.Len(t, bus.providers, 2)
 }
 
 func TestBus_ProvideFails(t *testing.T) {
@@ -399,6 +399,7 @@ func TestEmitEvent_OneListenerFails(t *testing.T) {
 func TestResolve_Van(t *testing.T) {
 	bus := New()
 	bus.Resolve(func(b Van) error {
+		assert.NotNil(t, b)
 		assert.Equal(t, bus, b)
 		return nil
 	})
