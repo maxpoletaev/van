@@ -35,10 +35,10 @@ func BenchmarkInvoke(b *testing.B) {
 		return nil
 	})
 
-	b.ResetTimer()
+	ctx := context.Background()
 	var err error
 
-	ctx := context.Background()
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		err = bus.InvokeCommand(ctx, &benchCommand{val: i})
 		if err != nil {
@@ -58,12 +58,27 @@ func BenchmarkInvoke_Singletons(b *testing.B) {
 		return nil
 	})
 
-	b.ResetTimer()
+	ctx := context.Background()
 	var err error
 
-	ctx := context.Background()
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		err = bus.InvokeCommand(ctx, &benchCommand{val: i})
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkResolve_Bus(b *testing.B) {
+	bus := New()
+	var err error
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		err = bus.Resolve(func(b Van) error {
+			return nil
+		})
 		if err != nil {
 			b.Fatal(err)
 		}

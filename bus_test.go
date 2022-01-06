@@ -3,6 +3,7 @@ package van
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -428,7 +429,7 @@ func TestResolveTransitive(t *testing.T) {
 	assert.Equal(t, 5, handlerExecuted)
 }
 
-func TestResolveSingleton(t *testing.T) {
+func TestResolve_Singleton(t *testing.T) {
 	bus := New()
 
 	var providerExecuted, handlerExecuted int
@@ -447,4 +448,28 @@ func TestResolveSingleton(t *testing.T) {
 
 	assert.Equal(t, 1, providerExecuted)
 	assert.Equal(t, 5, handlerExecuted)
+}
+
+func TestResolve_Race(t *testing.T) {
+	bus := New()
+
+	var providerExecuted int
+	bus.ProvideSingleton(func() GetIntService {
+		providerExecuted++
+		return &GetIntServiceImpl{}
+	})
+
+	wg := sync.WaitGroup{}
+	wg.Add(5)
+
+	for i := 0; i < 5; i++ {
+		go bus.Resolve(func(s GetIntService) error {
+			defer wg.Done()
+			assert.NotNil(t, s)
+			return nil
+		})
+	}
+
+	wg.Wait()
+	assert.Equal(t, 1, providerExecuted)
 }

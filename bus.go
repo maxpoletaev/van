@@ -31,7 +31,6 @@ type busImpl struct {
 	listeners   map[reflect.Type][]handlerFunc
 	instances   map[reflect.Type]interface{}
 	instancesMu sync.RWMutex
-	selfType    reflect.Type
 }
 
 func New() Van {
@@ -40,7 +39,6 @@ func New() Van {
 	b.handlers = make(map[reflect.Type]handlerFunc)
 	b.listeners = make(map[reflect.Type][]handlerFunc)
 	b.instances = make(map[reflect.Type]interface{})
-	b.selfType = reflect.TypeOf((*Van)(nil)).Elem()
 	return b
 }
 
@@ -113,11 +111,7 @@ func (b *busImpl) InvokeCommand(ctx context.Context, cmd interface{}) error {
 	args[0] = reflect.ValueOf(ctx)
 	args[1] = reflect.ValueOf(cmd)
 
-	err := b.resolve(handlerValue, args)
-	if err != nil {
-		return err
-	}
-
+	b.resolve(handlerValue, args)
 	ret := handlerValue.Call(args)
 	return toError(ret[0])
 }
@@ -175,20 +169,15 @@ func (b *busImpl) EmitEvent(ctx context.Context, event interface{}) (done chan s
 	}
 
 	wg := &sync.WaitGroup{}
+	wg.Add(len(listeners))
 	errchan = make(chan error, len(listeners))
 	for _, listener := range listeners {
 		listenerValue := reflect.ValueOf(listener)
 		args := make([]reflect.Value, listenerValue.Type().NumIn())
 		args[0] = reflect.ValueOf(ctx)
 		args[1] = reflect.ValueOf(event)
+		b.resolve(listenerValue, args)
 
-		err := b.resolve(listenerValue, args)
-		if err != nil {
-			errchan <- err
-			continue
-		}
-
-		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			ret := listenerValue.Call(args)
@@ -214,7 +203,7 @@ func (b *busImpl) Resolve(fn interface{}) error {
 		return ErrInvalidType.new("fn should be a function, got " + funcType.String())
 	case funcType.NumOut() != 1:
 		return ErrInvalidType.new("fn must have one return value, got " + fmt.Sprint(funcType.NumOut()))
-	case !isTypeError(funcType.Out(0)):
+	case !isError(funcType.Out(0)):
 		return ErrInvalidType.new("return value must be an error, got" + funcType.Out(0).String())
 	}
 
@@ -222,6 +211,9 @@ func (b *busImpl) Resolve(fn interface{}) error {
 		argType := funcType.In(i)
 		if argType.Kind() != reflect.Interface {
 			return fmt.Errorf("function argument %d is not an interface", i)
+		}
+		if !b.hasProvider(argType) {
+			return ErrProviderNotFound.new("no providers registered for type " + argType.String())
 		}
 	}
 
@@ -232,7 +224,7 @@ func (b *busImpl) Resolve(fn interface{}) error {
 	return toError(ret[0])
 }
 
-func (b *busImpl) resolve(funcValue reflect.Value, args []reflect.Value) error {
+func (b *busImpl) resolve(funcValue reflect.Value, args []reflect.Value) {
 	funcT := funcValue.Type()
 	for i := 0; i < funcT.NumIn(); i++ {
 		if args[i].IsValid() {
@@ -240,46 +232,51 @@ func (b *busImpl) resolve(funcValue reflect.Value, args []reflect.Value) error {
 				continue
 			}
 		}
+
 		argType := funcT.In(i)
 		if argType.Kind() != reflect.Interface {
 			continue
 		}
 
-		// dependency is the bus itself
-		if argType == b.selfType {
-			args[i] = reflect.ValueOf(b)
-			continue
-		}
+		args[i] = b.new(argType)
+	}
+}
 
-		// dependency is a singleton
-		if _, ok := b.instances[argType]; ok {
-			b.instancesMu.RLock()
-			args[i] = reflect.ValueOf(b.instances[argType])
-			b.instancesMu.RUnlock()
-			continue
-		}
-
-		provider := b.providers[argType]
-		providerType := reflect.TypeOf(provider.fn)
-		providerValue := reflect.ValueOf(provider.fn)
-
-		nextArgs := make([]reflect.Value, providerType.NumIn())
-		err := b.resolve(providerValue, nextArgs)
-		if err != nil {
-			return err
-		}
-
-		instance := providerValue.Call(nextArgs)[0]
-		if provider.singleton {
-			b.instancesMu.Lock()
-			b.instances[argType] = instance.Interface()
-			b.instancesMu.Unlock()
-		}
-
-		args[i] = instance
+func (b *busImpl) new(t reflect.Type) reflect.Value {
+	if isVanInterface(t) {
+		return reflect.ValueOf(b)
 	}
 
-	return nil
+	provider := b.providers[t]
+	if provider.singleton {
+		b.instancesMu.RLock()
+		if instance, ok := b.instances[t]; ok {
+			b.instancesMu.RUnlock()
+			return reflect.ValueOf(instance)
+		}
+		b.instancesMu.RUnlock()
+	}
+
+	providerType := reflect.TypeOf(provider.fn)
+	providerValue := reflect.ValueOf(provider.fn)
+
+	args := make([]reflect.Value, providerType.NumIn())
+	b.resolve(providerValue, args)
+
+	if provider.singleton {
+		b.instancesMu.Lock()
+		if instance, ok := b.instances[t]; ok {
+			b.instancesMu.Unlock()
+			return reflect.ValueOf(instance)
+		}
+
+		instance := providerValue.Call(args)[0]
+		b.instances[t] = instance.Interface()
+		b.instancesMu.Unlock()
+		return instance
+	}
+
+	return providerValue.Call(args)[0]
 }
 
 func (b *busImpl) validateProviderType(t reflect.Type) error {
@@ -315,9 +312,9 @@ func (b *busImpl) validateHandlerType(t reflect.Type) error {
 		return ErrInvalidType.new("handler must be a function, got " + t.String())
 	case t.NumIn() < 2:
 		return ErrInvalidType.new("handler must have at least 2 arguments, got " + fmt.Sprint(t.NumIn()))
-	case !isTypeContext(t.In(0)):
+	case !isContext(t.In(0)):
 		return ErrInvalidType.new("handler's first argument must be context.Context, got " + t.In(0).String())
-	case !isTypeStructPointer(t.In(1)):
+	case !isStructPtr(t.In(1)):
 		return ErrInvalidType.new("handler's second argument must be a struct pointer, got " + t.In(1).String())
 	case t.NumOut() != 1:
 		return ErrInvalidType.new("handler must have one return value, got " + fmt.Sprint(t.NumOut()))
@@ -325,7 +322,7 @@ func (b *busImpl) validateHandlerType(t reflect.Type) error {
 
 	retType := t.Out(0)
 	switch {
-	case !isTypeError(retType):
+	case !isError(retType):
 		return ErrInvalidType.new("handler's return type must be error, got " + retType.String())
 	}
 
@@ -350,7 +347,7 @@ func (b *busImpl) validateListener(t reflect.Type) error {
 		return ErrInvalidType.new("handler must be a function, got " + t.String())
 	case t.NumIn() < 2:
 		return ErrInvalidType.new("handler must have at least 2 arguments, got " + fmt.Sprint(t.NumIn()))
-	case !isTypeContext(t.In(0)):
+	case !isContext(t.In(0)):
 		return ErrInvalidType.new("handler's first argument must be context.Context, got " + t.In(0).String())
 	case t.In(1).Kind() != reflect.Struct:
 		return ErrInvalidType.new("handler's second argument must be a struct, got " + t.In(1).String())
@@ -372,22 +369,10 @@ func (b *busImpl) validateListener(t reflect.Type) error {
 }
 
 func (b *busImpl) hasProvider(t reflect.Type) bool {
-	if _, ok := b.providers[t]; ok || t == b.selfType {
+	if _, ok := b.providers[t]; ok || isVanInterface(t) {
 		return true
 	}
 	return false
-}
-
-func isTypeStructPointer(t reflect.Type) bool {
-	return t.Kind() == reflect.Ptr && t.Elem().Kind() == reflect.Struct
-}
-
-func isTypeContext(t reflect.Type) bool {
-	return t.Implements(reflect.TypeOf((*context.Context)(nil)).Elem())
-}
-
-func isTypeError(t reflect.Type) bool {
-	return t.Implements(reflect.TypeOf((*error)(nil)).Elem())
 }
 
 func toError(v reflect.Value) error {
