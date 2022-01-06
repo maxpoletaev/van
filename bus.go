@@ -279,7 +279,12 @@ func (b *busImpl) new(t reflect.Type) (reflect.Value, error) {
 	providerType := reflect.TypeOf(provider.fn)
 	providerValue := reflect.ValueOf(provider.fn)
 
-	args := make([]reflect.Value, providerType.NumIn())
+	numIn := providerType.NumIn()
+	var args []reflect.Value
+	if numIn > 0 {
+		args = make([]reflect.Value, numIn)
+	}
+
 	err := b.resolve(providerValue, args)
 	if err != nil {
 		return reflect.ValueOf(nil), err
@@ -350,12 +355,8 @@ func (b *busImpl) validateHandlerType(t reflect.Type) error {
 		return ErrInvalidType.new("handler's second argument must be a struct pointer, got " + t.In(1).String())
 	case t.NumOut() != 1:
 		return ErrInvalidType.new("handler must have one return value, got " + fmt.Sprint(t.NumOut()))
-	}
-
-	retType := t.Out(0)
-	switch {
-	case !isError(retType):
-		return ErrInvalidType.new("handler's return type must be error, got " + retType.String())
+	case !isError(t.Out(0)):
+		return ErrInvalidType.new("handler's return type must be error, got " + t.Out(0).String())
 	}
 
 	// start from the third argument as the first two are always `ctx` and `cmd`

@@ -55,7 +55,6 @@ func BenchmarkInvoke(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
-
 }
 
 func BenchmarkInvoke_Singletons(b *testing.B) {
