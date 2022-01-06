@@ -10,7 +10,7 @@ import (
 )
 
 type Command struct {
-	Value int
+	Result int
 }
 type Event struct {
 	Value int
@@ -46,16 +46,16 @@ func panicToError(fn func()) (err error) {
 
 func TestProvide(t *testing.T) {
 	bus := New().(*busImpl)
-	bus.Provide(func() GetIntService {
-		return &GetIntServiceImpl{}
+	bus.Provide(func() (GetIntService, error) {
+		return &GetIntServiceImpl{}, nil
 	})
 	assert.Len(t, bus.providers, 1)
 }
 
 func TestProvideSingleton(t *testing.T) {
 	bus := New().(*busImpl)
-	bus.ProvideSingleton(func() GetIntService {
-		return &GetIntServiceImpl{}
+	bus.ProvideSingleton(func() (GetIntService, error) {
+		return &GetIntServiceImpl{}, nil
 	})
 	assert.Len(t, bus.providers, 1)
 
@@ -72,14 +72,14 @@ func TestProvide_WithDeps(t *testing.T) {
 	bus := New().(*busImpl)
 
 	setIntService := &SetIntSevriceImpl{}
-	bus.Provide(func() SetIntService {
-		return setIntService
+	bus.Provide(func() (SetIntService, error) {
+		return setIntService, nil
 	})
 
-	bus.Provide(func(b Van, s SetIntService) GetIntService {
+	bus.Provide(func(b Van, s SetIntService) (GetIntService, error) {
 		assert.Equal(t, bus, b)
 		assert.Equal(t, setIntService, s)
-		return &GetIntServiceImpl{}
+		return &GetIntServiceImpl{}, nil
 	})
 
 	assert.Len(t, bus.providers, 2)
@@ -99,28 +99,33 @@ func TestBus_ProvideFails(t *testing.T) {
 		"no return value": {
 			provider:   func() {},
 			wantErr:    ErrInvalidType,
-			wantErrMsg: "provider must have one return value, got 0",
+			wantErrMsg: "provider must have two return values, got 0",
 		},
-		"multiple return values": {
-			provider:   func() (int, int) { return 1, 2 },
+		"too many return values": {
+			provider:   func() (int, int, int) { return 1, 2, 3 },
 			wantErr:    ErrInvalidType,
-			wantErrMsg: "provider must have one return value, got 2",
+			wantErrMsg: "provider must have two return values, got 3",
 		},
-		"return value not an interface": {
-			provider:   func() int { return 1 },
+		"first return value not an interface": {
+			provider:   func() (int, error) { return 1, nil },
 			wantErr:    ErrInvalidType,
-			wantErrMsg: "provider's return value must be an interface, got int",
+			wantErrMsg: "provider's first return value must be an interface, got int",
+		},
+		"second return value not an error": {
+			provider:   func() (GetIntService, int) { return nil, 1 },
+			wantErr:    ErrInvalidType,
+			wantErrMsg: "provider's second return value must be an error, got int",
 		},
 		"arg is not an interface": {
-			provider: func(int) GetIntService {
-				return &GetIntServiceImpl{}
+			provider: func(int) (GetIntService, error) {
+				return &GetIntServiceImpl{}, nil
 			},
 			wantErr:    ErrInvalidType,
 			wantErrMsg: "provider's argument 0 must be an interface, got int",
 		},
 		"unknown interface": {
-			provider: func(s SetIntService) GetIntService {
-				return &GetIntServiceImpl{}
+			provider: func(s SetIntService) (GetIntService, error) {
+				return &GetIntServiceImpl{}, nil
 			},
 			wantErr:    ErrProviderNotFound,
 			wantErrMsg: "no providers registered for type van.SetIntService",
@@ -238,9 +243,9 @@ func TestHandleCommandFails(t *testing.T) {
 func TestInvokeCommand(t *testing.T) {
 	bus := New()
 	var providerExecuted, handlerExecuted int
-	bus.Provide(func() SetIntService {
+	bus.Provide(func() (SetIntService, error) {
 		providerExecuted++
-		return &SetIntSevriceImpl{}
+		return &SetIntSevriceImpl{}, nil
 	})
 
 	bus.HandleCommand(Command{}, func(ctx context.Context, cmd *Command, s SetIntService) error {
@@ -288,6 +293,24 @@ func TestInvokeCommandFails(t *testing.T) {
 			assert.Equal(t, tt.wantErrMsg, err.Error())
 		})
 	}
+}
+
+func TestInvokeCommand_ProviderFails(t *testing.T) {
+	bus := New()
+	var providerExecuted, handlerExecuted int
+	bus.Provide(func() (GetIntService, error) {
+		providerExecuted++
+		return nil, assert.AnError
+	})
+	bus.HandleCommand(Command{}, func(ctx context.Context, cmd *Command, s GetIntService) error {
+		handlerExecuted++
+		return nil
+	})
+
+	err := bus.InvokeCommand(context.Background(), &Command{})
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Equal(t, 1, providerExecuted)
+	assert.Equal(t, 0, handlerExecuted)
 }
 
 func TestListenEvent(t *testing.T) {
@@ -399,30 +422,52 @@ func TestEmitEvent_OneListenerFails(t *testing.T) {
 	assert.Equal(t, listenerErr, <-errchan)
 }
 
+func TestEmitEvent_ProviderFails(t *testing.T) {
+	bus := New()
+	var providerExecuted, handlerExecuted int
+	bus.Provide(func() (GetIntService, error) {
+		providerExecuted++
+		return nil, assert.AnError
+	})
+	bus.ListenEvent(Event{}, func(ctx context.Context, event Event, s GetIntService) error {
+		handlerExecuted++
+		return nil
+	})
+	done, errchan := bus.EmitEvent(context.Background(), Event{})
+	<-done
+
+	assert.Len(t, errchan, 1)
+	assert.ErrorIs(t, <-errchan, assert.AnError)
+	assert.Equal(t, 1, providerExecuted)
+	assert.Equal(t, 0, handlerExecuted)
+}
+
 func TestResolve_Van(t *testing.T) {
 	bus := New()
-	bus.Resolve(func(b Van) error {
+	err := bus.Resolve(func(b Van) error {
 		assert.NotNil(t, b)
 		assert.Equal(t, bus, b)
 		return nil
 	})
+	assert.NoError(t, err)
 }
 
 func TestResolveTransitive(t *testing.T) {
 	bus := New()
 
 	var providerExecuted, handlerExecuted int
-	bus.Provide(func() GetIntService {
+	bus.Provide(func() (GetIntService, error) {
 		providerExecuted++
-		return &GetIntServiceImpl{}
+		return &GetIntServiceImpl{}, nil
 	})
 
 	for i := 0; i < 5; i++ {
-		bus.Resolve(func(s GetIntService) error {
+		err := bus.Resolve(func(s GetIntService) error {
 			assert.NotNil(t, s)
 			handlerExecuted++
 			return nil
 		})
+		assert.NoError(t, err)
 	}
 
 	assert.Equal(t, 5, providerExecuted)
@@ -433,17 +478,18 @@ func TestResolve_Singleton(t *testing.T) {
 	bus := New()
 
 	var providerExecuted, handlerExecuted int
-	bus.ProvideSingleton(func() GetIntService {
+	bus.ProvideSingleton(func() (GetIntService, error) {
 		providerExecuted++
-		return &GetIntServiceImpl{}
+		return &GetIntServiceImpl{}, nil
 	})
 
 	for i := 0; i < 5; i++ {
-		bus.Resolve(func(s GetIntService) error {
+		err := bus.Resolve(func(s GetIntService) error {
 			assert.NotNil(t, s)
 			handlerExecuted++
 			return nil
 		})
+		assert.NoError(t, err)
 	}
 
 	assert.Equal(t, 1, providerExecuted)
@@ -454,22 +500,28 @@ func TestResolve_Race(t *testing.T) {
 	bus := New()
 
 	var providerExecuted int
-	bus.ProvideSingleton(func() GetIntService {
+	bus.ProvideSingleton(func() (GetIntService, error) {
 		providerExecuted++
-		return &GetIntServiceImpl{}
+		return &GetIntServiceImpl{}, nil
 	})
 
+	errchan := make(chan error)
 	wg := sync.WaitGroup{}
 	wg.Add(5)
-
 	for i := 0; i < 5; i++ {
-		go bus.Resolve(func(s GetIntService) error {
-			defer wg.Done()
-			assert.NotNil(t, s)
-			return nil
-		})
+		go func() {
+			err := bus.Resolve(func(s GetIntService) error {
+				defer wg.Done()
+				assert.NotNil(t, s)
+				return nil
+			})
+			if err != nil {
+				errchan <- err
+			}
+		}()
 	}
 
 	wg.Wait()
+	assert.Len(t, errchan, 0)
 	assert.Equal(t, 1, providerExecuted)
 }

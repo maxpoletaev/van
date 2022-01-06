@@ -17,6 +17,11 @@ bench:  ## run benchmarks
 
 .PHONY: benchcmp
 benchcmp:  ## run benchmarks and compare with the previous benchcmp run
+	go test -bench=. -run=^$$ -benchmem > bench.txt
+	@benchstat bench.old.txt bench.txt
+
+.PHONY: newbenchcmp
+newbenchcmp:  ## run benchmarks and compare with the previous benchcmp run
 	[ -f bench.txt ] && mv bench.txt bench.old.txt || true
 	go test -bench=. -run=^$$ -benchmem > bench.txt
 	@benchstat bench.old.txt bench.txt
@@ -25,3 +30,7 @@ benchcmp:  ## run benchmarks and compare with the previous benchcmp run
 godoc:  ## start godoc server at :8000
 	@(sleep 1; open http://localhost:8000/pkg/$(pkgname)) &
 	@godoc -http=127.0.0.1:8000
+
+.PHONY: lint
+lint:  ## Run linter
+	golangci-lint run

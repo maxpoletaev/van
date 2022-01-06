@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-type providerFunc interface{} // func(deps ...interface{}) interface{}
+type providerFunc interface{} // func(deps ...interface{}) (interface{}, error)
 type handlerFunc interface{}  // func(ctx context.Context, cmd interface{}, deps ...interface{}) error
 
 type providerOpts struct {
@@ -111,7 +111,11 @@ func (b *busImpl) InvokeCommand(ctx context.Context, cmd interface{}) error {
 	args[0] = reflect.ValueOf(ctx)
 	args[1] = reflect.ValueOf(cmd)
 
-	b.resolve(handlerValue, args)
+	err := b.resolve(handlerValue, args)
+	if err != nil {
+		return err
+	}
+
 	ret := handlerValue.Call(args)
 	return toError(ret[0])
 }
@@ -145,7 +149,6 @@ func (b *busImpl) registerListener(event interface{}, listener handlerFunc) erro
 	}
 
 	b.listeners[eventType] = append(b.listeners[eventType], listener)
-
 	return nil
 }
 
@@ -169,15 +172,20 @@ func (b *busImpl) EmitEvent(ctx context.Context, event interface{}) (done chan s
 	}
 
 	wg := &sync.WaitGroup{}
-	wg.Add(len(listeners))
 	errchan = make(chan error, len(listeners))
 	for _, listener := range listeners {
 		listenerValue := reflect.ValueOf(listener)
 		args := make([]reflect.Value, listenerValue.Type().NumIn())
 		args[0] = reflect.ValueOf(ctx)
 		args[1] = reflect.ValueOf(event)
-		b.resolve(listenerValue, args)
 
+		err := b.resolve(listenerValue, args)
+		if err != nil {
+			errchan <- err
+			continue
+		}
+
+		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			ret := listenerValue.Call(args)
@@ -219,12 +227,16 @@ func (b *busImpl) Resolve(fn interface{}) error {
 
 	args := make([]reflect.Value, funcType.NumIn())
 	funcValue := reflect.ValueOf(fn)
-	b.resolve(funcValue, args)
+	err := b.resolve(funcValue, args)
+	if err != nil {
+		return err
+	}
+
 	ret := funcValue.Call(args)
 	return toError(ret[0])
 }
 
-func (b *busImpl) resolve(funcValue reflect.Value, args []reflect.Value) {
+func (b *busImpl) resolve(funcValue reflect.Value, args []reflect.Value) error {
 	funcT := funcValue.Type()
 	for i := 0; i < funcT.NumIn(); i++ {
 		if args[i].IsValid() {
@@ -238,13 +250,20 @@ func (b *busImpl) resolve(funcValue reflect.Value, args []reflect.Value) {
 			continue
 		}
 
-		args[i] = b.new(argType)
+		instance, err := b.new(argType)
+		if err != nil {
+			return err
+		}
+
+		args[i] = instance
 	}
+
+	return nil
 }
 
-func (b *busImpl) new(t reflect.Type) reflect.Value {
+func (b *busImpl) new(t reflect.Type) (reflect.Value, error) {
 	if isVanInterface(t) {
-		return reflect.ValueOf(b)
+		return reflect.ValueOf(b), nil
 	}
 
 	provider := b.providers[t]
@@ -252,7 +271,7 @@ func (b *busImpl) new(t reflect.Type) reflect.Value {
 		b.instancesMu.RLock()
 		if instance, ok := b.instances[t]; ok {
 			b.instancesMu.RUnlock()
-			return reflect.ValueOf(instance)
+			return reflect.ValueOf(instance), nil
 		}
 		b.instancesMu.RUnlock()
 	}
@@ -261,36 +280,49 @@ func (b *busImpl) new(t reflect.Type) reflect.Value {
 	providerValue := reflect.ValueOf(provider.fn)
 
 	args := make([]reflect.Value, providerType.NumIn())
-	b.resolve(providerValue, args)
+	err := b.resolve(providerValue, args)
+	if err != nil {
+		return reflect.ValueOf(nil), err
+	}
 
 	if provider.singleton {
 		b.instancesMu.Lock()
 		if instance, ok := b.instances[t]; ok {
 			b.instancesMu.Unlock()
-			return reflect.ValueOf(instance)
+			return reflect.ValueOf(instance), nil
 		}
 
-		instance := providerValue.Call(args)[0]
-		b.instances[t] = instance.Interface()
+		ret := providerValue.Call(args)
+		instanceValue, err := ret[0], toError(ret[1])
+		if err != nil {
+			b.instancesMu.Unlock()
+			err = fmt.Errorf("failed to resolve dependency %s: %w", t.String(), err)
+			return reflect.ValueOf(nil), err
+		}
+
+		b.instances[t] = instanceValue.Interface()
 		b.instancesMu.Unlock()
-		return instance
+		return instanceValue, nil
 	}
 
-	return providerValue.Call(args)[0]
+	ret := providerValue.Call(args)
+	if err := toError(ret[1]); err != nil {
+		return reflect.ValueOf(nil), fmt.Errorf("failed to resolve dependency %s: %w", t.String(), err)
+	}
+
+	return ret[0], nil
 }
 
 func (b *busImpl) validateProviderType(t reflect.Type) error {
 	switch {
 	case t.Kind() != reflect.Func:
 		return ErrInvalidType.new("provider must be a function, got " + t.String())
-	case t.NumOut() != 1:
-		return ErrInvalidType.new("provider must have one return value, got " + fmt.Sprint(t.NumOut()))
-	}
-
-	retType := t.Out(0)
-	switch {
-	case retType.Kind() != reflect.Interface:
-		return ErrInvalidType.new("provider's return value must be an interface, got " + retType.String())
+	case t.NumOut() != 2:
+		return ErrInvalidType.new("provider must have two return values, got " + fmt.Sprint(t.NumOut()))
+	case t.Out(0).Kind() != reflect.Interface:
+		return ErrInvalidType.new("provider's first return value must be an interface, got " + t.Out(0).String())
+	case !isError(t.Out(1)):
+		return ErrInvalidType.new("provider's second return value must be an error, got " + t.Out(1).String())
 	}
 
 	for i := 0; i < t.NumIn(); i++ {
@@ -326,7 +358,6 @@ func (b *busImpl) validateHandlerType(t reflect.Type) error {
 		return ErrInvalidType.new("handler's return type must be error, got " + retType.String())
 	}
 
-	// make sure all the dependencies are interfaces and have registered providers
 	// start from the third argument as the first two are always `ctx` and `cmd`
 	for i := 2; i < t.NumIn(); i++ {
 		argType := t.In(i)
@@ -353,7 +384,6 @@ func (b *busImpl) validateListener(t reflect.Type) error {
 		return ErrInvalidType.new("handler's second argument must be a struct, got " + t.In(1).String())
 	}
 
-	// make sure all the dependencies are interfaces and have registered providers
 	// start from the third argument as the first two are always `ctx` and `cmd`
 	for i := 2; i < t.NumIn(); i++ {
 		argType := t.In(i)
