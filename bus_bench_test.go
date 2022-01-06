@@ -55,6 +55,7 @@ func BenchmarkInvoke(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+
 }
 
 func BenchmarkInvoke_Singletons(b *testing.B) {
@@ -106,23 +107,16 @@ func BenchmarkResolve_Bus(b *testing.B) {
 }
 
 func BenchmarkFuncCallStatic(b *testing.B) {
-	sqrt := func(v float64) float64 {
-		return math.Sqrt(v)
-	}
-	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		sqrt(float64(i))
+		math.Sqrt(float64(100000))
 	}
 }
 
 func BenchmarkFuncCallReflection(b *testing.B) {
-	sqrt := func(v float64) error {
-		math.Sqrt(v)
-		return nil
-	}
-	sqrtV := reflect.ValueOf(sqrt)
+	sqrt := reflect.ValueOf(math.Sqrt)
+	args := []reflect.Value{reflect.ValueOf(float64(100000))}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		sqrtV.Call([]reflect.Value{reflect.ValueOf(float64(i))})
+		sqrt.Call(args)
 	}
 }
