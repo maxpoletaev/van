@@ -123,37 +123,38 @@ goos: darwin
 goarch: amd64
 pkg: github.com/maxpoletaev/van
 cpu: Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz
-BenchmarkFuncCallStatic-12        	1000000000	       0.2531 ns/op
-BenchmarkFuncCallReflection-12    	4533655	           265.4 ns/op
+BenchmarkFuncCallStatic-12        	1000000000	   0.2447 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFuncCallReflection-12    	5328840	       222.5 ns/op	      32 B/op	       2 allocs/op
 ```
 
 <details>
 <summary>Benchmark code</summary>
 
 ```go
-func BenchmarkSqrtNative(b *testing.B) {
-	sqrt := func(v float64) float64 {
-		return math.Sqrt(v)
-	}
-	b.ResetTimer()
+func BenchmarkFuncCallStatic(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		sqrt(float64(i))
+		math.Sqrt(float64(100000))
 	}
 }
 
-func BenchmarkSqrtReflection(b *testing.B) {
-	sqrt := func(v float64) error {
-		math.Sqrt(v)
-		return nil
-	}
-	sqrtV := reflect.ValueOf(sqrt)
+func BenchmarkFuncCallReflection(b *testing.B) {
+	args := []reflect.Value{reflect.ValueOf(float64(100000))}
+	sqrt := reflect.ValueOf(math.Sqrt)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		sqrtV.Call([]reflect.Value{reflect.ValueOf(float64(i))})
+		sqrt.Call(args)
 	}
 }
+
 ```
 </details>
+
+The key is to use singletons whenever possible to avoid `reflect.Value.Call()`:
+
+```
+BenchmarkInvoke-12                	   82945	     13932 ns/op	    3640 B/op	     145 allocs/op
+BenchmarkInvoke_Singletons-12     	  691203	      1729 ns/op	     352 B/op	      11 allocs/op
+```
 
 I mean, it is not extremely bad, given the fact that Go still uses lots of dynamic function calls in its standard library (e.g. `template/html`). However, it is better to stay away if performance is the priority. This project is more about convenience over performance.
 
