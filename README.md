@@ -66,7 +66,7 @@ event := OrderCreatedEvent{
 bus.EmitEvent(context.Background(), event)
 ```
 
-Although event processing is asynchronous, there are done and error channels that you can use to wait for the event to be processed, therefore converting it to a synchronous call:
+Since events asynchronous, they are not supposed to return anything or report about thier execution state. Van, however, let’s the programmer to wait for the event to be processed, therefore converting it to a synchronous call, if needed:
 
 ```go
 done, errchan := bus.EmitEvent(ctx, event)
@@ -81,11 +81,13 @@ case err := <-errchan:
 ## Providers
 
  * Provider is essentially a constructor of an arbitrary type.
+ * Provider should return a single interface.
  * Providers can depend on other providers.
- * Proviers are executed every time the dependecy is requested, they are not singletons.
+ * Providers can be either transitive (executed every time the dep is requested), or signletons.
+ * There is no such thing as "optional dependency", provider should panic if it can’t provide one.
 
 ```go
-bus.Provide(func() Logger {
+bus.ProvideSingleton(func() Logger {
 	return &logging.DumbStdoutLogger{}
 })
 
@@ -93,7 +95,6 @@ bus.Provide(func(logger Logger) UserRepository {
 	return &PersistentUserRepository{Logger: logger}
 })
 ```
-
 
 ## Handlers
 
@@ -103,18 +104,21 @@ bus.Provide(func(logger Logger) UserRepository {
  * Handlers cannot return values, except for error.
 
 ```go
-commandHandler := func(ctx context.Context, cmd *Command, logger Logger) error {
+func PrintHelloWorld(ctx context.Context, cmd *PrintHelloWorldCommand, logger Logger, bus van.Van) error {
 	logger.Print("Hello, World!")
+	bus.EmitEvent(ctx, HelloWorldPrintedEvent{})
 	return
 }
-eventHandler := func(ctx context.Context, event Event) error {
+
+ func HelloWorldPrinted(ctx context.Context, event HelloWorldPrintedEvent, logger Logger) error {
+	logger.Print("hello world has been printed")
 	return
 }
 ```
 
 ## Is it slow?
 
-Well, yeah... Although it tries to do most of the checks during the handler registration, it’s still slow as hell due to reflection magic under the hood used for dynamically-constructed function arguments, the most painful of which is `reflect.Value.Call()`
+Well, yeah... Although it tries to do most of the checks during the start up, it’s still slow as hell due to reflection magic under the hood used for dynamically-constructed function arguments, the most painful of which is `reflect.Value.Call()`.
 
 The following benchmark shows that simple dynamic function calls in Go are about 1000 times slower than static function calls, and this is even without the dependency-injection overhead involved.
 
@@ -145,18 +149,17 @@ func BenchmarkFuncCallReflection(b *testing.B) {
 		sqrt.Call(args)
 	}
 }
-
 ```
 </details>
 
-The key is to use singletons whenever possible to avoid `reflect.Value.Call()`:
+The key is to use singletons whenever possible to avoid cascade `reflect.Value.Call()` calls. This is far from ideal but ten times faster:
 
 ```
 BenchmarkInvoke-12                	   82945	     13932 ns/op	    3640 B/op	     145 allocs/op
 BenchmarkInvoke_Singletons-12     	  691203	      1729 ns/op	     352 B/op	      11 allocs/op
 ```
 
-I mean, it is not extremely bad, given the fact that Go still uses lots of dynamic function calls in its standard library (e.g. `template/html`). However, it is better to stay away if performance is the priority. This project is more about convenience over performance.
+I mean, it is not extremely bad, given the fact that we are still in the microseconds scale. However, it is better to stay away if performance is the priority.
 
 ## How do I return a value from a command handler?
 
@@ -185,7 +188,7 @@ println(cmd.Result) // 3
 
 ## How do I create a parametrized provider?
 
-Create a wrapper function for your provider. No need to specify the exact return type for it:
+Create a wrapper function for your provider:
 
 ```go
 func newLoggerProvider(logLevel string) interface{} {
@@ -193,18 +196,8 @@ func newLoggerProvider(logLevel string) interface{} {
 		return &SimpleLogger{Level: logLevel}
 	}
 }
+
 bus.Provide(newLoggerProvider("INFO"))
-```
-
-## How do I create a singleton provider?
-
-Initialize it outside of the provider function:
-
-```go
-authClient := auth.NewClient()
-bus.Provide(func() AuthClient {
-    return authClient
-})
 ```
 
 ## Can I have multiple providers for the same type?
@@ -221,14 +214,3 @@ bus.Provide(func() Logger { logging.NewLogger() })
 bus.Provide(func() Logger2 { logging.NewLogger() })
 ```
 
-## How do I access the bus inside a handler?
-
-There’s a provider already registered for the Van type:
-
-```go
-func CreateUser(ctx context.Context, cmd *CreateUserCommand, bus van.Van) error {
-	// ...
-	bus.EmitEvent(ctx, UserCreatedEvent{User: user})
-	return nil
-}
-```
