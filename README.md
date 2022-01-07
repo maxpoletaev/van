@@ -24,12 +24,12 @@ func PrintHello(ctx context.Context, cmd *PrintHelloCommand) error {
 	fmt.Printf("Hello, %s!\n", cmd.Name)
 }
 
-// Register handler
-bus.HandleCommand(PrintHelloCommand{}, PrintHello)
+// Register command handler
+bus.Handle(PrintHelloCommand{}, PrintHello)
 
 // Send command to the bus
 cmd := &PrintHelloCommand{Name: "Harry"}
-err := bus.InvokeCommand(context.Background(), cmd)
+err := bus.Invoke(context.Background(), cmd)
 if err != nil {
 	panic(err)
 }
@@ -55,21 +55,21 @@ func OrderCreated(ctx *context.Context, event OrderCreatedEvent) error {
 	return nil
 }
 
-// Subscribe to event
-bus.ListenEvent(OrderCreatedEvent{}, OrderCreated)
+// Register event handler
+bus.Subscribe(OrderCreatedEvent{}, OrderCreated)
 
-// Send event to the bus
+// Publish event to the bus
 event := OrderCreatedEvent{
 	OrderID:   "ord-134",
 	Timestamp: time.Now().Unix(),
 }
-bus.EmitEvent(context.Background(), event)
+bus.Publish(context.Background(), event)
 ```
 
 Since events asynchronous, they are not supposed to return anything or report about thier execution state. Van, however, let’s the programmer to wait for the event to be processed, therefore converting it to a synchronous call, if needed:
 
 ```go
-done, errchan := bus.EmitEvent(ctx, event)
+done, errchan := bus.Publish(ctx, event)
 select {
 case <-done:
 	return nil
@@ -106,7 +106,7 @@ bus.Provide(func(logger Logger) UserRepository {
 ```go
 func PrintHelloWorld(ctx context.Context, cmd *PrintHelloWorldCommand, logger Logger, bus van.Van) error {
 	logger.Print("Hello, World!")
-	bus.EmitEvent(ctx, HelloWorldPrintedEvent{})
+	bus.Publish(ctx, HelloWorldPrintedEvent{})
 	return
 }
 
@@ -178,7 +178,7 @@ func Sum(ctx context.Context, cmd *SumCommand) error {
 }
 
 cmd := &SumCommand{A: 1, B: 2}
-err := bus.InvokeCommand(context.Background(), cmd)
+err := bus.Invoke(context.Background(), cmd)
 if err != nil {
 	panic(err)
 }
@@ -213,4 +213,3 @@ type Logger2 Logger
 bus.Provide(func() Logger { logging.NewLogger() })
 bus.Provide(func() Logger2 { logging.NewLogger() })
 ```
-

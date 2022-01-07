@@ -9,6 +9,7 @@ import (
 
 type providerFunc interface{} // func(deps ...interface{}) (interface{}, error)
 type handlerFunc interface{}  // func(ctx context.Context, cmd interface{}, deps ...interface{}) error
+type listenerFunc interface{} // func(ctx context.Context, event interface{}, deps ...interface) error
 
 type providerOpts struct {
 	fn        providerFunc
@@ -18,11 +19,11 @@ type providerOpts struct {
 type Van interface {
 	Provide(provider providerFunc)
 	ProvideSingleton(provider providerFunc)
-	HandleCommand(cmd interface{}, handler handlerFunc)
-	InvokeCommand(ctx context.Context, cmd interface{}) error
-	ListenEvent(event interface{}, listeners ...handlerFunc)
-	EmitEvent(ctx context.Context, event interface{}) (chan struct{}, chan error)
-	Resolve(fn interface{}) error
+	Handle(cmd interface{}, handler handlerFunc)
+	Invoke(ctx context.Context, cmd interface{}) error
+	Subscribe(event interface{}, listeners ...listenerFunc)
+	Publish(ctx context.Context, event interface{}) (chan struct{}, chan error)
+	Exec(fn interface{}) error
 }
 
 type busImpl struct {
@@ -65,7 +66,7 @@ func (b *busImpl) ProvideSingleton(provider providerFunc) {
 	}
 }
 
-func (b *busImpl) HandleCommand(cmd interface{}, handler handlerFunc) {
+func (b *busImpl) Handle(cmd interface{}, handler handlerFunc) {
 	err := b.registerHandler(cmd, handler)
 	if err != nil {
 		panic(err)
@@ -91,7 +92,7 @@ func (b *busImpl) registerHandler(cmd interface{}, handler handlerFunc) error {
 	return nil
 }
 
-func (b *busImpl) InvokeCommand(ctx context.Context, cmd interface{}) error {
+func (b *busImpl) Invoke(ctx context.Context, cmd interface{}) error {
 	cmdType := reflect.TypeOf(cmd)
 	if cmdType.Kind() != reflect.Ptr {
 		return ErrInvalidType.new("cmd must be a pointer to a struct")
@@ -120,7 +121,7 @@ func (b *busImpl) InvokeCommand(ctx context.Context, cmd interface{}) error {
 	return toError(ret[0])
 }
 
-func (b *busImpl) ListenEvent(event interface{}, listeners ...handlerFunc) {
+func (b *busImpl) Subscribe(event interface{}, listeners ...listenerFunc) {
 	for i := range listeners {
 		err := b.registerListener(event, listeners[i])
 		if err != nil {
@@ -129,7 +130,7 @@ func (b *busImpl) ListenEvent(event interface{}, listeners ...handlerFunc) {
 	}
 }
 
-func (b *busImpl) registerListener(event interface{}, listener handlerFunc) error {
+func (b *busImpl) registerListener(event interface{}, listener listenerFunc) error {
 	eventType := reflect.TypeOf(event)
 	if eventType.Kind() != reflect.Struct {
 		return ErrInvalidType.new("event must be a struct, got " + eventType.String())
@@ -152,13 +153,13 @@ func (b *busImpl) registerListener(event interface{}, listener handlerFunc) erro
 	return nil
 }
 
-func (b *busImpl) EmitEvent(ctx context.Context, event interface{}) (done chan struct{}, errchan chan error) {
+func (b *busImpl) Publish(ctx context.Context, event interface{}) (done chan struct{}, errchan chan error) {
 	done = make(chan struct{})
 	errchan = make(chan error, 1)
 
 	eventType := reflect.TypeOf(event)
 	if eventType.Kind() != reflect.Struct {
-		errchan <- ErrInvalidType.new("event must be a a struct")
+		errchan <- ErrInvalidType.new("event must be a a struct, got " + eventType.Name())
 		close(done)
 		close(errchan)
 		return
@@ -204,7 +205,7 @@ func (b *busImpl) EmitEvent(ctx context.Context, event interface{}) (done chan s
 	return
 }
 
-func (b *busImpl) Resolve(fn interface{}) error {
+func (b *busImpl) Exec(fn interface{}) error {
 	funcType := reflect.TypeOf(fn)
 	switch {
 	case funcType.Kind() != reflect.Func:

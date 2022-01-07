@@ -41,7 +41,7 @@ func BenchmarkInvoke(b *testing.B) {
 	bus.Provide(func(a serviceA, b serviceB, c serviceC, d serviceD) (serviceE, error) {
 		return &serviceImpl{ret: 5}, nil
 	})
-	bus.HandleCommand(benchCommand{}, func(ctx context.Context, cmd *benchCommand, a serviceA, b serviceB, c serviceC, d serviceD, e serviceE) error {
+	bus.Handle(benchCommand{}, func(ctx context.Context, cmd *benchCommand, a serviceA, b serviceB, c serviceC, d serviceD, e serviceE) error {
 		return nil
 	})
 
@@ -50,7 +50,7 @@ func BenchmarkInvoke(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err = bus.InvokeCommand(ctx, &benchCommand{val: i})
+		err = bus.Invoke(ctx, &benchCommand{val: i})
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -74,7 +74,7 @@ func BenchmarkInvoke_Singletons(b *testing.B) {
 	bus.ProvideSingleton(func(a serviceA, b serviceB, c serviceC, d serviceD) (serviceE, error) {
 		return &serviceImpl{ret: 5}, nil
 	})
-	bus.HandleCommand(benchCommand{}, func(ctx context.Context, cmd *benchCommand, a serviceA, b serviceB, c serviceC, d serviceD, e serviceE) error {
+	bus.Handle(benchCommand{}, func(ctx context.Context, cmd *benchCommand, a serviceA, b serviceB, c serviceC, d serviceD, e serviceE) error {
 		return nil
 	})
 
@@ -83,20 +83,20 @@ func BenchmarkInvoke_Singletons(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err = bus.InvokeCommand(ctx, &benchCommand{val: i})
+		err = bus.Invoke(ctx, &benchCommand{val: i})
 		if err != nil {
 			b.Fatal(err)
 		}
 	}
 }
 
-func BenchmarkResolve_Bus(b *testing.B) {
+func BenchmarkExec_Bus(b *testing.B) {
 	bus := New()
 	var err error
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err = bus.Resolve(func(b Van) error {
+		err = bus.Exec(func(b Van) error {
 			return nil
 		})
 		if err != nil {

@@ -46,6 +46,23 @@ func panicToError(fn func()) (err error) {
 
 func TestProvide(t *testing.T) {
 	bus := New().(*busImpl)
+
+	setIntService := &SetIntSevriceImpl{}
+	bus.Provide(func() (SetIntService, error) {
+		return setIntService, nil
+	})
+
+	bus.Provide(func(b Van, s SetIntService) (GetIntService, error) {
+		assert.Equal(t, bus, b)
+		assert.Equal(t, setIntService, s)
+		return &GetIntServiceImpl{}, nil
+	})
+
+	assert.Len(t, bus.providers, 2)
+}
+
+func TestProvide_NoDeps(t *testing.T) {
+	bus := New().(*busImpl)
 	bus.Provide(func() (GetIntService, error) {
 		return &GetIntServiceImpl{}, nil
 	})
@@ -68,24 +85,7 @@ func TestProvideSingleton(t *testing.T) {
 	assert.True(t, opts.singleton)
 }
 
-func TestProvide_WithDeps(t *testing.T) {
-	bus := New().(*busImpl)
-
-	setIntService := &SetIntSevriceImpl{}
-	bus.Provide(func() (SetIntService, error) {
-		return setIntService, nil
-	})
-
-	bus.Provide(func(b Van, s SetIntService) (GetIntService, error) {
-		assert.Equal(t, bus, b)
-		assert.Equal(t, setIntService, s)
-		return &GetIntServiceImpl{}, nil
-	})
-
-	assert.Len(t, bus.providers, 2)
-}
-
-func TestBus_ProvideFails(t *testing.T) {
+func TestProvideFails(t *testing.T) {
 	tests := map[string]struct {
 		provider   interface{}
 		wantErr    error
@@ -144,15 +144,15 @@ func TestBus_ProvideFails(t *testing.T) {
 	}
 }
 
-func TestHandleCommand(t *testing.T) {
+func TestHandle(t *testing.T) {
 	bus := New().(*busImpl)
-	bus.HandleCommand(Command{}, func(ctx context.Context, cmd *Command, bus Van) error {
+	bus.Handle(Command{}, func(ctx context.Context, cmd *Command, bus Van) error {
 		return nil
 	})
 	assert.Len(t, bus.handlers, 1)
 }
 
-func TestHandleCommandFails(t *testing.T) {
+func TestHandleFails(t *testing.T) {
 	tests := map[string]struct {
 		cmd        interface{}
 		handler    interface{}
@@ -232,7 +232,7 @@ func TestHandleCommandFails(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			bus := New()
 			err := panicToError(func() {
-				bus.HandleCommand(tt.cmd, tt.handler)
+				bus.Handle(tt.cmd, tt.handler)
 			})
 			assert.ErrorIs(t, err, tt.wantErr)
 			assert.Equal(t, tt.wantErrMsg, err.Error())
@@ -240,7 +240,7 @@ func TestHandleCommandFails(t *testing.T) {
 	}
 }
 
-func TestInvokeCommand(t *testing.T) {
+func TestInvoke(t *testing.T) {
 	bus := New()
 	var providerExecuted, handlerExecuted int
 	bus.Provide(func() (SetIntService, error) {
@@ -248,14 +248,14 @@ func TestInvokeCommand(t *testing.T) {
 		return &SetIntSevriceImpl{}, nil
 	})
 
-	bus.HandleCommand(Command{}, func(ctx context.Context, cmd *Command, s SetIntService) error {
+	bus.Handle(Command{}, func(ctx context.Context, cmd *Command, s SetIntService) error {
 		handlerExecuted++
 		return nil
 	})
 
 	ctx := context.Background()
 	for i := 0; i < 5; i++ {
-		err := bus.InvokeCommand(ctx, &Command{})
+		err := bus.Invoke(ctx, &Command{})
 		assert.NoError(t, err)
 	}
 
@@ -263,7 +263,7 @@ func TestInvokeCommand(t *testing.T) {
 	assert.Equal(t, handlerExecuted, 5)
 }
 
-func TestInvokeCommandFails(t *testing.T) {
+func TestInvokeFails(t *testing.T) {
 	tests := map[string]struct {
 		cmd        interface{}
 		wantErrMsg string
@@ -289,41 +289,51 @@ func TestInvokeCommandFails(t *testing.T) {
 	ctx := context.Background()
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			err := bus.InvokeCommand(ctx, tt.cmd)
+			err := bus.Invoke(ctx, tt.cmd)
 			assert.Equal(t, tt.wantErrMsg, err.Error())
 		})
 	}
 }
 
-func TestInvokeCommand_ProviderFails(t *testing.T) {
+func TestInvokeFails_ProviderError(t *testing.T) {
 	bus := New()
 	var providerExecuted, handlerExecuted int
 	bus.Provide(func() (GetIntService, error) {
 		providerExecuted++
 		return nil, assert.AnError
 	})
-	bus.HandleCommand(Command{}, func(ctx context.Context, cmd *Command, s GetIntService) error {
+	bus.Handle(Command{}, func(ctx context.Context, cmd *Command, s GetIntService) error {
 		handlerExecuted++
 		return nil
 	})
 
-	err := bus.InvokeCommand(context.Background(), &Command{})
+	err := bus.Invoke(context.Background(), &Command{})
 	assert.ErrorIs(t, err, assert.AnError)
 	assert.Equal(t, 1, providerExecuted)
 	assert.Equal(t, 0, handlerExecuted)
 }
 
-func TestListenEvent(t *testing.T) {
+func TestInvokeFails_HandlerError(t *testing.T) {
+	bus := New()
+	bus.Handle(Command{}, func(ctx context.Context, cmd *Command) error {
+		return assert.AnError
+	})
+
+	err := bus.Invoke(context.Background(), &Command{})
+	assert.Error(t, assert.AnError, err)
+}
+
+func TestHandleEvent(t *testing.T) {
 	bus := New().(*busImpl)
 	handler := func(ctx context.Context, event Event, b Van) error {
 		assert.NotNil(t, b)
 		return nil
 	}
-	bus.ListenEvent(Event{}, handler)
+	bus.Subscribe(Event{}, handler)
 	assert.Len(t, bus.listeners, 1)
 }
 
-func TestListenEvenFails(t *testing.T) {
+func TestSubscribeFails(t *testing.T) {
 	tests := map[string]struct {
 		handler    interface{}
 		wantErrMsg string
@@ -357,7 +367,7 @@ func TestListenEvenFails(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			err := panicToError(func() {
-				bus.ListenEvent(Event{}, tt.handler)
+				bus.Subscribe(Event{}, tt.handler)
 			})
 			assert.Error(t, err)
 			assert.Equal(t, tt.wantErrMsg, err.Error())
@@ -365,7 +375,7 @@ func TestListenEvenFails(t *testing.T) {
 	}
 }
 
-func TestEmitEvent_SingleListener(t *testing.T) {
+func TestPublish_SingleListener(t *testing.T) {
 	var eventTriggered int
 	listener := func(ctx context.Context, event Event) error {
 		eventTriggered++
@@ -373,14 +383,14 @@ func TestEmitEvent_SingleListener(t *testing.T) {
 	}
 
 	bus := New()
-	bus.ListenEvent(Event{}, listener)
-	done, errchan := bus.EmitEvent(context.Background(), Event{})
+	bus.Subscribe(Event{}, listener)
+	done, errchan := bus.Publish(context.Background(), Event{})
 	<-done
 	assert.Len(t, errchan, 0)
 	assert.Equal(t, eventTriggered, 1)
 }
 
-func TestEmitEvent_MultipleListeners(t *testing.T) {
+func TestPublish_MultipleListeners(t *testing.T) {
 	var listenerACalled, listenerBCalled int
 	listenerA := func(ctx context.Context, event Event) error {
 		listenerACalled++
@@ -392,15 +402,15 @@ func TestEmitEvent_MultipleListeners(t *testing.T) {
 	}
 
 	bus := New()
-	bus.ListenEvent(Event{}, listenerA, listenerB)
-	done, errchan := bus.EmitEvent(context.Background(), Event{})
+	bus.Subscribe(Event{}, listenerA, listenerB)
+	done, errchan := bus.Publish(context.Background(), Event{})
 	<-done
 	assert.Len(t, errchan, 0)
 	assert.Equal(t, listenerACalled, 1)
 	assert.Equal(t, listenerBCalled, 1)
 }
 
-func TestEmitEvent_OneListenerFails(t *testing.T) {
+func TestPublish_ListenerFails(t *testing.T) {
 	var eventTriggered int
 	listener := func(ctx context.Context, event Event) error {
 		eventTriggered++
@@ -413,8 +423,8 @@ func TestEmitEvent_OneListenerFails(t *testing.T) {
 	}
 
 	bus := New()
-	bus.ListenEvent(Event{}, badListener, listener)
-	done, errchan := bus.EmitEvent(context.Background(), Event{Value: 1})
+	bus.Subscribe(Event{}, badListener, listener)
+	done, errchan := bus.Publish(context.Background(), Event{})
 	<-done
 
 	assert.Equal(t, eventTriggered, 1)
@@ -422,18 +432,18 @@ func TestEmitEvent_OneListenerFails(t *testing.T) {
 	assert.Equal(t, listenerErr, <-errchan)
 }
 
-func TestEmitEvent_ProviderFails(t *testing.T) {
+func TestPublish_ProviderFails(t *testing.T) {
 	bus := New()
 	var providerExecuted, handlerExecuted int
 	bus.Provide(func() (GetIntService, error) {
 		providerExecuted++
 		return nil, assert.AnError
 	})
-	bus.ListenEvent(Event{}, func(ctx context.Context, event Event, s GetIntService) error {
+	bus.Subscribe(Event{}, func(ctx context.Context, event Event, s GetIntService) error {
 		handlerExecuted++
 		return nil
 	})
-	done, errchan := bus.EmitEvent(context.Background(), Event{})
+	done, errchan := bus.Publish(context.Background(), Event{})
 	<-done
 
 	assert.Len(t, errchan, 1)
@@ -442,9 +452,9 @@ func TestEmitEvent_ProviderFails(t *testing.T) {
 	assert.Equal(t, 0, handlerExecuted)
 }
 
-func TestResolve_Van(t *testing.T) {
+func TestExec_Bus(t *testing.T) {
 	bus := New()
-	err := bus.Resolve(func(b Van) error {
+	err := bus.Exec(func(b Van) error {
 		assert.NotNil(t, b)
 		assert.Equal(t, bus, b)
 		return nil
@@ -452,7 +462,7 @@ func TestResolve_Van(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestResolveTransitive(t *testing.T) {
+func TestExec_Transitive(t *testing.T) {
 	bus := New()
 
 	var providerExecuted, handlerExecuted int
@@ -462,7 +472,7 @@ func TestResolveTransitive(t *testing.T) {
 	})
 
 	for i := 0; i < 5; i++ {
-		err := bus.Resolve(func(s GetIntService) error {
+		err := bus.Exec(func(s GetIntService) error {
 			assert.NotNil(t, s)
 			handlerExecuted++
 			return nil
@@ -474,7 +484,7 @@ func TestResolveTransitive(t *testing.T) {
 	assert.Equal(t, 5, handlerExecuted)
 }
 
-func TestResolve_Singleton(t *testing.T) {
+func TestExec_Singleton(t *testing.T) {
 	bus := New()
 
 	var providerExecuted, handlerExecuted int
@@ -484,7 +494,7 @@ func TestResolve_Singleton(t *testing.T) {
 	})
 
 	for i := 0; i < 5; i++ {
-		err := bus.Resolve(func(s GetIntService) error {
+		err := bus.Exec(func(s GetIntService) error {
 			assert.NotNil(t, s)
 			handlerExecuted++
 			return nil
@@ -496,7 +506,7 @@ func TestResolve_Singleton(t *testing.T) {
 	assert.Equal(t, 5, handlerExecuted)
 }
 
-func TestResolve_Race(t *testing.T) {
+func TestExec_SingletonRace(t *testing.T) {
 	bus := New()
 
 	var providerExecuted int
@@ -510,7 +520,7 @@ func TestResolve_Race(t *testing.T) {
 	wg.Add(5)
 	for i := 0; i < 5; i++ {
 		go func() {
-			err := bus.Resolve(func(s GetIntService) error {
+			err := bus.Exec(func(s GetIntService) error {
 				defer wg.Done()
 				assert.NotNil(t, s)
 				return nil
