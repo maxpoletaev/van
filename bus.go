@@ -24,6 +24,7 @@ type Van interface {
 	Subscribe(event interface{}, listeners ...listenerFunc)
 	Publish(ctx context.Context, event interface{}) (chan struct{}, chan error)
 	Exec(ctx context.Context, fn interface{}) error
+	Wait()
 }
 
 type busImpl struct {
@@ -32,6 +33,7 @@ type busImpl struct {
 	listeners   map[reflect.Type][]handlerFunc
 	instances   map[reflect.Type]interface{}
 	instancesMu sync.RWMutex
+	runnig      sync.WaitGroup
 }
 
 func New() Van {
@@ -40,7 +42,12 @@ func New() Van {
 	b.handlers = make(map[reflect.Type]handlerFunc)
 	b.listeners = make(map[reflect.Type][]handlerFunc)
 	b.instances = make(map[reflect.Type]interface{})
+	b.runnig = sync.WaitGroup{}
 	return b
+}
+
+func (b *busImpl) Wait() {
+	b.runnig.Wait()
 }
 
 func (b *busImpl) Provide(provider providerFunc) {
@@ -114,6 +121,9 @@ func (b *busImpl) Invoke(ctx context.Context, cmd interface{}) error {
 		return err
 	}
 
+	b.runnig.Add(1)
+	defer b.runnig.Done()
+
 	ret := handlerValue.Call(args)
 	return toError(ret[0])
 }
@@ -181,8 +191,11 @@ func (b *busImpl) Publish(ctx context.Context, event interface{}) (done chan str
 		}
 
 		wg.Add(1)
+		b.runnig.Add(1)
 		go func() {
 			defer wg.Done()
+			defer b.runnig.Done()
+
 			ret := listenerValue.Call(args)
 			if err := toError(ret[0]); err != nil {
 				errchan <- err
