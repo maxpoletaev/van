@@ -101,41 +101,41 @@ func TestProvideFails(t *testing.T) {
 	}{
 		"not a func": {
 			provider:   1,
-			wantErr:    ErrInvalidType,
+			wantErr:    errInvalidType,
 			wantErrMsg: "provider must be a function, got int",
 		},
 		"no return value": {
 			provider:   func() {},
-			wantErr:    ErrInvalidType,
+			wantErr:    errInvalidType,
 			wantErrMsg: "provider must have two return values, got 0",
 		},
 		"too many return values": {
 			provider:   func() (int, int, int) { return 1, 2, 3 },
-			wantErr:    ErrInvalidType,
+			wantErr:    errInvalidType,
 			wantErrMsg: "provider must have two return values, got 3",
 		},
 		"first return value not an interface": {
 			provider:   func() (int, error) { return 1, nil },
-			wantErr:    ErrInvalidType,
+			wantErr:    errInvalidType,
 			wantErrMsg: "provider's first return value must be an interface, got int",
 		},
 		"second return value not an error": {
 			provider:   func() (GetIntService, int) { return nil, 1 },
-			wantErr:    ErrInvalidType,
+			wantErr:    errInvalidType,
 			wantErrMsg: "provider's second return value must be an error, got int",
 		},
 		"arg is not an interface": {
 			provider: func(int) (GetIntService, error) {
 				return &GetIntServiceImpl{}, nil
 			},
-			wantErr:    ErrInvalidType,
+			wantErr:    errInvalidType,
 			wantErrMsg: "provider's argument 0 must be an interface, got int",
 		},
 		"unknown interface": {
 			provider: func(s SetIntService) (GetIntService, error) {
 				return &GetIntServiceImpl{}, nil
 			},
-			wantErr:    ErrProviderNotFound,
+			wantErr:    errProviderNotFound,
 			wantErrMsg: "no providers registered for type van.SetIntService",
 		},
 	}
@@ -170,37 +170,37 @@ func TestHandleFails(t *testing.T) {
 		"msg not a struct": {
 			cmd:        1,
 			handler:    func() {},
-			wantErr:    ErrInvalidType,
+			wantErr:    errInvalidType,
 			wantErrMsg: "msg must be a struct, got int",
 		},
 		"handler not a func": {
 			cmd:        struct{}{},
 			handler:    1,
-			wantErr:    ErrInvalidType,
+			wantErr:    errInvalidType,
 			wantErrMsg: "handler must be a function, got int",
 		},
 		"less than two args": {
 			cmd:        struct{}{},
 			handler:    func() error { return nil },
-			wantErr:    ErrInvalidType,
+			wantErr:    errInvalidType,
 			wantErrMsg: "handler must have at least 2 arguments, got 0",
 		},
 		"second arg is not a pointer": {
 			cmd:        struct{}{},
 			handler:    func(context.Context, int) error { return nil },
-			wantErr:    ErrInvalidType,
+			wantErr:    errInvalidType,
 			wantErrMsg: "handler's second argument must be a struct pointer, got int",
 		},
 		"second arg is not a struct pointer": {
 			cmd:        struct{}{},
 			handler:    func(context.Context, *int) error { return nil },
-			wantErr:    ErrInvalidType,
+			wantErr:    errInvalidType,
 			wantErrMsg: "handler's second argument must be a struct pointer, got *int",
 		},
 		"no return values": {
 			cmd:        struct{}{},
 			handler:    func(ctx context.Context, msg *struct{}) {},
-			wantErr:    ErrInvalidType,
+			wantErr:    errInvalidType,
 			wantErrMsg: "handler must have one return value, got 0",
 		},
 		"multiple return values": {
@@ -208,7 +208,7 @@ func TestHandleFails(t *testing.T) {
 			handler: func(ctx context.Context, msg *struct{}) (error, error) {
 				return nil, nil
 			},
-			wantErr:    ErrInvalidType,
+			wantErr:    errInvalidType,
 			wantErrMsg: "handler must have one return value, got 2",
 		},
 		"return type not an error": {
@@ -216,7 +216,7 @@ func TestHandleFails(t *testing.T) {
 			handler: func(ctx context.Context, msg *struct{}) int {
 				return 0
 			},
-			wantErr:    ErrInvalidType,
+			wantErr:    errInvalidType,
 			wantErrMsg: "handler's return type must be error, got int",
 		},
 		"unknown interface": {
@@ -224,7 +224,7 @@ func TestHandleFails(t *testing.T) {
 			handler: func(ctx context.Context, msg *struct{}, s SetIntService) error {
 				return nil
 			},
-			wantErr:    ErrProviderNotFound,
+			wantErr:    errProviderNotFound,
 			wantErrMsg: "no providers registered for type van.SetIntService",
 		},
 		"command type mismatch": {
@@ -232,7 +232,7 @@ func TestHandleFails(t *testing.T) {
 			handler: func(ctx context.Context, cmd *Command) error {
 				return nil
 			},
-			wantErr:    ErrInvalidType,
+			wantErr:    errInvalidType,
 			wantErrMsg: "command type mismatch",
 		},
 	}

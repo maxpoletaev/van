@@ -1,8 +1,8 @@
 package van
 
 var (
-	ErrInvalidType      = newError("invalid type")
-	ErrProviderNotFound = newError("provider not found")
+	errInvalidType      = newError("invalid type")
+	errProviderNotFound = newError("provider not found")
 )
 
 type localError struct {

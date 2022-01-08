@@ -57,6 +57,27 @@ func BenchmarkInvoke(b *testing.B) {
 	}
 }
 
+func BenchmarkInvoke_SingleProvider(b *testing.B) {
+	bus := New()
+	bus.Provide(func() (serviceA, error) {
+		return &serviceImpl{ret: 1}, nil
+	})
+	bus.Handle(benchCommand{}, func(ctx context.Context, cmd *benchCommand, a serviceA) error {
+		return nil
+	})
+
+	ctx := context.Background()
+	var err error
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		err = bus.Invoke(ctx, &benchCommand{val: i})
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkInvoke_Singletons(b *testing.B) {
 	bus := New()
 	bus.ProvideSingleton(func() (serviceA, error) {
@@ -84,6 +105,23 @@ func BenchmarkInvoke_Singletons(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		err = bus.Invoke(ctx, &benchCommand{val: i})
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkExec_SingleProvider(b *testing.B) {
+	bus := New()
+	bus.Provide(func() (serviceA, error) {
+		return &serviceImpl{ret: 1}, nil
+	})
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		err := bus.Exec(context.Background(), func(a serviceA) error {
+			return nil
+		})
 		if err != nil {
 			b.Fatal(err)
 		}

@@ -7,30 +7,57 @@ import (
 	"sync"
 )
 
-type providerFunc interface{} // func(ctx context.Context, deps ...interface{}) (interface{}, error)
-type handlerFunc interface{}  // func(ctx context.Context, cmd interface{}, deps ...interface{}) error
-type listenerFunc interface{} // func(ctx context.Context, event interface{}, deps ...interface) error
+type ProviderFunc interface{} // func(ctx context.Context, deps ...interface{}) (interface{}, error)
+type HandlerFunc interface{}  // func(ctx context.Context, cmd interface{}, deps ...interface{}) error
+type ListenerFunc interface{} // func(ctx context.Context, event interface{}, deps ...interface) error
 
 type providerOpts struct {
-	fn        providerFunc
+	fn        ProviderFunc
 	singleton bool
 }
 
 type Van interface {
-	Provide(provider providerFunc)
-	ProvideSingleton(provider providerFunc)
-	Handle(cmd interface{}, handler handlerFunc)
+	// Provide registers new type constructor that will be called every time a handler requests the dependency.
+	// There's no such thing as "optional" dependency. Therefore the provider should either return a valid non-nil
+	// dependency or an error.
+	// It is expected to be called during the app startup phase as it performs the run time type checking and
+	// PANICS if an incorrect function type is provided.
+	Provide(provider ProviderFunc)
+
+	// ProvideSingleton registers a new type constructor that is guaranteed to be called not more than once in
+	// application's lifetime.
+	// It is expected to be called during the app startup phase as it performs the run time type checking and
+	// PANICS if an incorrect function type is provided.
+	ProvideSingleton(provider ProviderFunc)
+
+	// Handle registers a handler for the given command type. There can be only one handler per command.
+	// It is expected to be called during the app startup phase as it performs the run time type checking and
+	// PANICS if an incorrect function type is provided.
+	Handle(cmd interface{}, handler HandlerFunc)
+
+	// Subscribe registers a new handler for the given command type. There can be any number of handlers per event.
+	// It is expected to be called during the app startup phase as it performs the run time type checking and
+	// PANICS if an incorrect function type is provided.
+	Subscribe(event interface{}, listeners ...ListenerFunc)
+
+	// Invoke runs an associated command handler.
 	Invoke(ctx context.Context, cmd interface{}) error
-	Subscribe(event interface{}, listeners ...listenerFunc)
+
+	// Publish sends an event to the bus. Each listener is executed concurrently and can fail independently.
 	Publish(ctx context.Context, event interface{}) (chan struct{}, chan error)
+
+	// Exec executes the given function inside the dependency injector.
 	Exec(ctx context.Context, fn interface{}) error
+
+	// Wait blocks until all current events are processed. Useful for graceful shutdown. The app should
+	// ensure no new events/commands are published. Otherwise, it may run forever.
 	Wait()
 }
 
 type busImpl struct {
 	providers   map[reflect.Type]providerOpts
-	handlers    map[reflect.Type]handlerFunc
-	listeners   map[reflect.Type][]handlerFunc
+	handlers    map[reflect.Type]HandlerFunc
+	listeners   map[reflect.Type][]HandlerFunc
 	instances   map[reflect.Type]interface{}
 	instancesMu sync.RWMutex
 	runnig      sync.WaitGroup
@@ -39,8 +66,8 @@ type busImpl struct {
 func New() Van {
 	b := &busImpl{}
 	b.providers = make(map[reflect.Type]providerOpts)
-	b.handlers = make(map[reflect.Type]handlerFunc)
-	b.listeners = make(map[reflect.Type][]handlerFunc)
+	b.handlers = make(map[reflect.Type]HandlerFunc)
+	b.listeners = make(map[reflect.Type][]HandlerFunc)
 	b.instances = make(map[reflect.Type]interface{})
 	b.runnig = sync.WaitGroup{}
 	return b
@@ -50,7 +77,7 @@ func (b *busImpl) Wait() {
 	b.runnig.Wait()
 }
 
-func (b *busImpl) Provide(provider providerFunc) {
+func (b *busImpl) Provide(provider ProviderFunc) {
 	providerType := reflect.TypeOf(provider)
 	if err := b.validateProviderType(providerType); err != nil {
 		panic(err)
@@ -60,7 +87,7 @@ func (b *busImpl) Provide(provider providerFunc) {
 	b.providers[retType] = providerOpts{fn: provider}
 }
 
-func (b *busImpl) ProvideSingleton(provider providerFunc) {
+func (b *busImpl) ProvideSingleton(provider ProviderFunc) {
 	providerType := reflect.TypeOf(provider)
 	if err := b.validateProviderType(providerType); err != nil {
 		panic(err)
@@ -73,17 +100,17 @@ func (b *busImpl) ProvideSingleton(provider providerFunc) {
 	}
 }
 
-func (b *busImpl) Handle(cmd interface{}, handler handlerFunc) {
+func (b *busImpl) Handle(cmd interface{}, handler HandlerFunc) {
 	err := b.registerHandler(cmd, handler)
 	if err != nil {
 		panic(err)
 	}
 }
 
-func (b *busImpl) registerHandler(cmd interface{}, handler handlerFunc) error {
+func (b *busImpl) registerHandler(cmd interface{}, handler HandlerFunc) error {
 	cmdType := reflect.TypeOf(cmd)
 	if cmdType.Kind() != reflect.Struct {
-		return ErrInvalidType.new("msg must be a struct, got " + cmdType.Name())
+		return errInvalidType.new("msg must be a struct, got " + cmdType.Name())
 	}
 
 	handlerType := reflect.TypeOf(handler)
@@ -92,7 +119,7 @@ func (b *busImpl) registerHandler(cmd interface{}, handler handlerFunc) error {
 	}
 
 	if cmdType != handlerType.In(1).Elem() {
-		return ErrInvalidType.new("command type mismatch")
+		return errInvalidType.new("command type mismatch")
 	}
 
 	b.handlers[cmdType] = handler
@@ -102,16 +129,16 @@ func (b *busImpl) registerHandler(cmd interface{}, handler handlerFunc) error {
 func (b *busImpl) Invoke(ctx context.Context, cmd interface{}) error {
 	cmdType := reflect.TypeOf(cmd)
 	if cmdType.Kind() != reflect.Ptr {
-		return ErrInvalidType.new("cmd must be a pointer to a struct")
+		return errInvalidType.new("cmd must be a pointer to a struct")
 	}
 	cmdType = cmdType.Elem()
 	if cmdType.Kind() != reflect.Struct {
-		return ErrInvalidType.new("cmd must be a pointer to a struct")
+		return errInvalidType.new("cmd must be a pointer to a struct")
 	}
 
 	handler, ok := b.handlers[cmdType]
 	if !ok {
-		return ErrProviderNotFound.new("no handlers found for type " + cmdType.String())
+		return errProviderNotFound.new("no handlers found for type " + cmdType.String())
 	}
 
 	handlerValue := reflect.ValueOf(handler)
@@ -128,7 +155,7 @@ func (b *busImpl) Invoke(ctx context.Context, cmd interface{}) error {
 	return toError(ret[0])
 }
 
-func (b *busImpl) Subscribe(event interface{}, listeners ...listenerFunc) {
+func (b *busImpl) Subscribe(event interface{}, listeners ...ListenerFunc) {
 	for i := range listeners {
 		err := b.registerListener(event, listeners[i])
 		if err != nil {
@@ -137,10 +164,10 @@ func (b *busImpl) Subscribe(event interface{}, listeners ...listenerFunc) {
 	}
 }
 
-func (b *busImpl) registerListener(event interface{}, listener listenerFunc) error {
+func (b *busImpl) registerListener(event interface{}, listener ListenerFunc) error {
 	eventType := reflect.TypeOf(event)
 	if eventType.Kind() != reflect.Struct {
-		return ErrInvalidType.new("event must be a struct, got " + eventType.String())
+		return errInvalidType.new("event must be a struct, got " + eventType.String())
 	}
 
 	listenerType := reflect.TypeOf(listener)
@@ -149,11 +176,11 @@ func (b *busImpl) registerListener(event interface{}, listener listenerFunc) err
 	}
 
 	if eventType != listenerType.In(1) {
-		return ErrInvalidType.new("event type mismatch")
+		return errInvalidType.new("event type mismatch")
 	}
 
 	if _, ok := b.listeners[eventType]; !ok {
-		b.listeners[eventType] = make([]handlerFunc, 0)
+		b.listeners[eventType] = make([]HandlerFunc, 0)
 	}
 
 	b.listeners[eventType] = append(b.listeners[eventType], listener)
@@ -166,7 +193,7 @@ func (b *busImpl) Publish(ctx context.Context, event interface{}) (done chan str
 
 	eventType := reflect.TypeOf(event)
 	if eventType.Kind() != reflect.Struct {
-		errchan <- ErrInvalidType.new("event must be a a struct, got " + eventType.Name())
+		errchan <- errInvalidType.new("event must be a a struct, got " + eventType.Name())
 		close(done)
 		close(errchan)
 		return
@@ -216,11 +243,11 @@ func (b *busImpl) Exec(ctx context.Context, fn interface{}) error {
 	funcType := reflect.TypeOf(fn)
 	switch {
 	case funcType.Kind() != reflect.Func:
-		return ErrInvalidType.new("fn should be a function, got " + funcType.String())
+		return errInvalidType.new("fn should be a function, got " + funcType.String())
 	case funcType.NumOut() != 1:
-		return ErrInvalidType.new("fn must have one return value, got " + fmt.Sprint(funcType.NumOut()))
+		return errInvalidType.new("fn must have one return value, got " + fmt.Sprint(funcType.NumOut()))
 	case !isError(funcType.Out(0)):
-		return ErrInvalidType.new("return value must be an error, got" + funcType.Out(0).String())
+		return errInvalidType.new("return value must be an error, got" + funcType.Out(0).String())
 	}
 
 	for i := 0; i < funcType.NumIn(); i++ {
@@ -229,7 +256,7 @@ func (b *busImpl) Exec(ctx context.Context, fn interface{}) error {
 			return fmt.Errorf("function argument %d is not an interface", i)
 		}
 		if !b.hasProvider(argType) {
-			return ErrProviderNotFound.new("no providers registered for type " + argType.String())
+			return errProviderNotFound.new("no providers registered for type " + argType.String())
 		}
 	}
 
@@ -329,22 +356,22 @@ func (b *busImpl) new(ctx context.Context, t reflect.Type) (reflect.Value, error
 func (b *busImpl) validateProviderType(t reflect.Type) error {
 	switch {
 	case t.Kind() != reflect.Func:
-		return ErrInvalidType.new("provider must be a function, got " + t.String())
+		return errInvalidType.new("provider must be a function, got " + t.String())
 	case t.NumOut() != 2:
-		return ErrInvalidType.new("provider must have two return values, got " + fmt.Sprint(t.NumOut()))
+		return errInvalidType.new("provider must have two return values, got " + fmt.Sprint(t.NumOut()))
 	case t.Out(0).Kind() != reflect.Interface:
-		return ErrInvalidType.new("provider's first return value must be an interface, got " + t.Out(0).String())
+		return errInvalidType.new("provider's first return value must be an interface, got " + t.Out(0).String())
 	case !isError(t.Out(1)):
-		return ErrInvalidType.new("provider's second return value must be an error, got " + t.Out(1).String())
+		return errInvalidType.new("provider's second return value must be an error, got " + t.Out(1).String())
 	}
 
 	for i := 0; i < t.NumIn(); i++ {
 		argType := t.In(i)
 		if argType.Kind() != reflect.Interface {
-			return ErrInvalidType.new(fmt.Sprintf("provider's argument %d must be an interface, got %s", i, argType.String()))
+			return errInvalidType.new(fmt.Sprintf("provider's argument %d must be an interface, got %s", i, argType.String()))
 		}
 		if !b.hasProvider(argType) {
-			return ErrProviderNotFound.new("no providers registered for type " + argType.String())
+			return errProviderNotFound.new("no providers registered for type " + argType.String())
 		}
 	}
 
@@ -354,27 +381,27 @@ func (b *busImpl) validateProviderType(t reflect.Type) error {
 func (b *busImpl) validateHandlerType(t reflect.Type) error {
 	switch {
 	case t.Kind() != reflect.Func:
-		return ErrInvalidType.new("handler must be a function, got " + t.String())
+		return errInvalidType.new("handler must be a function, got " + t.String())
 	case t.NumIn() < 2:
-		return ErrInvalidType.new("handler must have at least 2 arguments, got " + fmt.Sprint(t.NumIn()))
+		return errInvalidType.new("handler must have at least 2 arguments, got " + fmt.Sprint(t.NumIn()))
 	case !isContext(t.In(0)):
-		return ErrInvalidType.new("handler's first argument must be context.Context, got " + t.In(0).String())
+		return errInvalidType.new("handler's first argument must be context.Context, got " + t.In(0).String())
 	case !isStructPtr(t.In(1)):
-		return ErrInvalidType.new("handler's second argument must be a struct pointer, got " + t.In(1).String())
+		return errInvalidType.new("handler's second argument must be a struct pointer, got " + t.In(1).String())
 	case t.NumOut() != 1:
-		return ErrInvalidType.new("handler must have one return value, got " + fmt.Sprint(t.NumOut()))
+		return errInvalidType.new("handler must have one return value, got " + fmt.Sprint(t.NumOut()))
 	case !isError(t.Out(0)):
-		return ErrInvalidType.new("handler's return type must be error, got " + t.Out(0).String())
+		return errInvalidType.new("handler's return type must be error, got " + t.Out(0).String())
 	}
 
 	// start from the third argument as the first two are always `ctx` and `cmd`
 	for i := 2; i < t.NumIn(); i++ {
 		argType := t.In(i)
 		if argType.Kind() != reflect.Interface {
-			return ErrInvalidType.new(fmt.Sprintf("handler's argument %d must be an interface, got %s", i, argType.String()))
+			return errInvalidType.new(fmt.Sprintf("handler's argument %d must be an interface, got %s", i, argType.String()))
 		}
 		if !b.hasProvider(argType) {
-			return ErrProviderNotFound.new("no providers registered for type " + argType.String())
+			return errProviderNotFound.new("no providers registered for type " + argType.String())
 		}
 	}
 
@@ -384,23 +411,23 @@ func (b *busImpl) validateHandlerType(t reflect.Type) error {
 func (b *busImpl) validateListener(t reflect.Type) error {
 	switch {
 	case t.Kind() != reflect.Func:
-		return ErrInvalidType.new("handler must be a function, got " + t.String())
+		return errInvalidType.new("handler must be a function, got " + t.String())
 	case t.NumIn() < 2:
-		return ErrInvalidType.new("handler must have at least 2 arguments, got " + fmt.Sprint(t.NumIn()))
+		return errInvalidType.new("handler must have at least 2 arguments, got " + fmt.Sprint(t.NumIn()))
 	case !isContext(t.In(0)):
-		return ErrInvalidType.new("handler's first argument must be context.Context, got " + t.In(0).String())
+		return errInvalidType.new("handler's first argument must be context.Context, got " + t.In(0).String())
 	case t.In(1).Kind() != reflect.Struct:
-		return ErrInvalidType.new("handler's second argument must be a struct, got " + t.In(1).String())
+		return errInvalidType.new("handler's second argument must be a struct, got " + t.In(1).String())
 	}
 
 	// start from the third argument as the first two are always `ctx` and `cmd`
 	for i := 2; i < t.NumIn(); i++ {
 		argType := t.In(i)
 		if argType.Kind() != reflect.Interface {
-			return ErrInvalidType.new(fmt.Sprintf("handler's argument %d must be an interface, got %s", i, argType.String()))
+			return errInvalidType.new(fmt.Sprintf("handler's argument %d must be an interface, got %s", i, argType.String()))
 		}
 		if !b.hasProvider(argType) {
-			return ErrProviderNotFound.new("no providers registered for type " + argType.String())
+			return errProviderNotFound.new("no providers registered for type " + argType.String())
 		}
 	}
 

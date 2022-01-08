@@ -33,4 +33,4 @@ godoc:  ## start godoc server at :8000
 
 .PHONY: lint
 lint:  ## Run linter
-	golangci-lint run
+	golangci-lint run -E gofmt,unparam,prealloc
