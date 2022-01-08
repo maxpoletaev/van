@@ -81,18 +81,18 @@ case err := <-errchan:
 ## Providers
 
  * Provider is essentially a constructor of an arbitrary type.
- * Provider should return a single interface.
+ * Provider should return an interface and an error.
  * Providers can depend on other providers.
  * Providers can be either transitive (executed every time the dep is requested), or signletons.
  * There is no such thing as "optional dependency", provider should panic if it can’t provide one.
 
 ```go
-bus.ProvideSingleton(func() Logger {
+bus.ProvideSingleton(func() (Logger, error) {
 	return &logging.DumbStdoutLogger{}
 })
 
-bus.Provide(func(logger Logger) UserRepository {
-	return &PersistentUserRepository{Logger: logger}
+bus.Provide(func(ctx context.Context, logger Logger) (UserRepository, error) {
+	return &PostgresUserRepo{Logger: logger}
 })
 ```
 

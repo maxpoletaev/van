@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-type providerFunc interface{} // func(deps ...interface{}) (interface{}, error)
+type providerFunc interface{} // func(ctx context.Context, deps ...interface{}) (interface{}, error)
 type handlerFunc interface{}  // func(ctx context.Context, cmd interface{}, deps ...interface{}) error
 type listenerFunc interface{} // func(ctx context.Context, event interface{}, deps ...interface) error
 
@@ -23,7 +23,7 @@ type Van interface {
 	Invoke(ctx context.Context, cmd interface{}) error
 	Subscribe(event interface{}, listeners ...listenerFunc)
 	Publish(ctx context.Context, event interface{}) (chan struct{}, chan error)
-	Exec(fn interface{}) error
+	Exec(ctx context.Context, fn interface{}) error
 }
 
 type busImpl struct {
@@ -109,10 +109,7 @@ func (b *busImpl) Invoke(ctx context.Context, cmd interface{}) error {
 
 	handlerValue := reflect.ValueOf(handler)
 	args := make([]reflect.Value, handlerValue.Type().NumIn())
-	args[0] = reflect.ValueOf(ctx)
-	args[1] = reflect.ValueOf(cmd)
-
-	err := b.resolve(handlerValue, args)
+	err := b.resolve(ctx, cmd, handlerValue, args)
 	if err != nil {
 		return err
 	}
@@ -177,10 +174,7 @@ func (b *busImpl) Publish(ctx context.Context, event interface{}) (done chan str
 	for _, listener := range listeners {
 		listenerValue := reflect.ValueOf(listener)
 		args := make([]reflect.Value, listenerValue.Type().NumIn())
-		args[0] = reflect.ValueOf(ctx)
-		args[1] = reflect.ValueOf(event)
-
-		err := b.resolve(listenerValue, args)
+		err := b.resolve(ctx, event, listenerValue, args)
 		if err != nil {
 			errchan <- err
 			continue
@@ -205,7 +199,7 @@ func (b *busImpl) Publish(ctx context.Context, event interface{}) (done chan str
 	return
 }
 
-func (b *busImpl) Exec(fn interface{}) error {
+func (b *busImpl) Exec(ctx context.Context, fn interface{}) error {
 	funcType := reflect.TypeOf(fn)
 	switch {
 	case funcType.Kind() != reflect.Func:
@@ -226,9 +220,9 @@ func (b *busImpl) Exec(fn interface{}) error {
 		}
 	}
 
-	args := make([]reflect.Value, funcType.NumIn())
 	funcValue := reflect.ValueOf(fn)
-	err := b.resolve(funcValue, args)
+	args := make([]reflect.Value, funcType.NumIn())
+	err := b.resolve(ctx, nil, funcValue, args)
 	if err != nil {
 		return err
 	}
@@ -237,37 +231,36 @@ func (b *busImpl) Exec(fn interface{}) error {
 	return toError(ret[0])
 }
 
-func (b *busImpl) resolve(funcValue reflect.Value, args []reflect.Value) error {
-	funcT := funcValue.Type()
-	for i := 0; i < funcT.NumIn(); i++ {
-		if args[i].IsValid() {
-			if _, ok := args[i].Interface().(context.Context); ok {
-				continue
+func (b *busImpl) resolve(
+	ctx context.Context,
+	cmd interface{},
+	funcValue reflect.Value,
+	args []reflect.Value,
+) error {
+	funcType := funcValue.Type()
+	for i := 0; i < funcType.NumIn(); i++ {
+		argType := funcType.In(i)
+		switch {
+		case i == 0 && isContext(argType):
+			args[i] = reflect.ValueOf(ctx)
+		case i == 1 && argType == reflect.TypeOf(cmd):
+			args[i] = reflect.ValueOf(cmd)
+		case isBusItself(argType):
+			args[i] = reflect.ValueOf(b)
+		case argType.Kind() == reflect.Interface:
+			instance, err := b.new(ctx, argType)
+			if err != nil {
+				return err
 			}
+			args[i] = instance
 		}
-
-		argType := funcT.In(i)
-		if argType.Kind() != reflect.Interface {
-			continue
-		}
-
-		instance, err := b.new(argType)
-		if err != nil {
-			return err
-		}
-
-		args[i] = instance
 	}
-
 	return nil
 }
 
-func (b *busImpl) new(t reflect.Type) (reflect.Value, error) {
-	if isVanInterface(t) {
-		return reflect.ValueOf(b), nil
-	}
-
+func (b *busImpl) new(ctx context.Context, t reflect.Type) (reflect.Value, error) {
 	provider := b.providers[t]
+
 	if provider.singleton {
 		b.instancesMu.RLock()
 		if instance, ok := b.instances[t]; ok {
@@ -286,7 +279,7 @@ func (b *busImpl) new(t reflect.Type) (reflect.Value, error) {
 		args = make([]reflect.Value, numIn)
 	}
 
-	err := b.resolve(providerValue, args)
+	err := b.resolve(ctx, nil, providerValue, args)
 	if err != nil {
 		return reflect.ValueOf(nil), err
 	}
@@ -308,6 +301,7 @@ func (b *busImpl) new(t reflect.Type) (reflect.Value, error) {
 
 		b.instances[t] = instanceValue.Interface()
 		b.instancesMu.Unlock()
+
 		return instanceValue, nil
 	}
 
@@ -401,7 +395,8 @@ func (b *busImpl) validateListener(t reflect.Type) error {
 }
 
 func (b *busImpl) hasProvider(t reflect.Type) bool {
-	if _, ok := b.providers[t]; ok || isVanInterface(t) {
+	_, ok := b.providers[t]
+	if ok || isBusItself(t) || isContext(t) {
 		return true
 	}
 	return false

@@ -69,6 +69,14 @@ func TestProvide_NoDeps(t *testing.T) {
 	assert.Len(t, bus.providers, 1)
 }
 
+func TestProvide_WithContext(t *testing.T) {
+	bus := New().(*busImpl)
+	bus.Provide(func(ctx context.Context) (GetIntService, error) {
+		return &GetIntServiceImpl{}, nil
+	})
+	assert.Len(t, bus.providers, 1)
+}
+
 func TestProvideSingleton(t *testing.T) {
 	bus := New().(*busImpl)
 	bus.ProvideSingleton(func() (GetIntService, error) {
@@ -248,12 +256,12 @@ func TestInvoke(t *testing.T) {
 		return &SetIntSevriceImpl{}, nil
 	})
 
-	bus.Handle(Command{}, func(ctx context.Context, cmd *Command, s SetIntService) error {
+	ctx := context.Background()
+	bus.Handle(Command{}, func(c context.Context, cmd *Command, s SetIntService) error {
 		handlerExecuted++
 		return nil
 	})
 
-	ctx := context.Background()
 	for i := 0; i < 5; i++ {
 		err := bus.Invoke(ctx, &Command{})
 		assert.NoError(t, err)
@@ -454,12 +462,31 @@ func TestPublish_ProviderFails(t *testing.T) {
 
 func TestExec_Bus(t *testing.T) {
 	bus := New()
-	err := bus.Exec(func(b Van) error {
+	err := bus.Exec(context.Background(), func(b Van) error {
 		assert.NotNil(t, b)
 		assert.Equal(t, bus, b)
 		return nil
 	})
 	assert.NoError(t, err)
+}
+
+func TestExec_ProviderContext(t *testing.T) {
+	bus := New()
+
+	ctx := context.Background()
+	var providerCalled int
+	bus.Provide(func(c context.Context) (GetIntService, error) {
+		providerCalled++
+		assert.Equal(t, ctx, c)
+		return &GetIntServiceImpl{}, nil
+	})
+
+	bus.Exec(ctx, func(s GetIntService) error {
+		s.Get()
+		return nil
+	})
+
+	assert.Equal(t, 1, providerCalled)
 }
 
 func TestExec_Transitive(t *testing.T) {
@@ -472,7 +499,7 @@ func TestExec_Transitive(t *testing.T) {
 	})
 
 	for i := 0; i < 5; i++ {
-		err := bus.Exec(func(s GetIntService) error {
+		err := bus.Exec(context.Background(), func(s GetIntService) error {
 			assert.NotNil(t, s)
 			handlerExecuted++
 			return nil
@@ -494,7 +521,7 @@ func TestExec_Singleton(t *testing.T) {
 	})
 
 	for i := 0; i < 5; i++ {
-		err := bus.Exec(func(s GetIntService) error {
+		err := bus.Exec(context.Background(), func(s GetIntService) error {
 			assert.NotNil(t, s)
 			handlerExecuted++
 			return nil
@@ -520,7 +547,7 @@ func TestExec_SingletonRace(t *testing.T) {
 	wg.Add(5)
 	for i := 0; i < 5; i++ {
 		go func() {
-			err := bus.Exec(func(s GetIntService) error {
+			err := bus.Exec(context.Background(), func(s GetIntService) error {
 				defer wg.Done()
 				assert.NotNil(t, s)
 				return nil

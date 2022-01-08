@@ -11,7 +11,7 @@ var (
 	contextType = reflect.TypeOf((*context.Context)(nil)).Elem()
 )
 
-func isVanInterface(t reflect.Type) bool {
+func isBusItself(t reflect.Type) bool {
 	return t == vanType
 }
 

@@ -96,7 +96,7 @@ func BenchmarkExec_Bus(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err = bus.Exec(func(b Van) error {
+		err = bus.Exec(context.Background(), func(b Van) error {
 			return nil
 		})
 		if err != nil {
