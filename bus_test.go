@@ -171,7 +171,7 @@ func TestHandleFails(t *testing.T) {
 			cmd:        1,
 			handler:    func() {},
 			wantErr:    errInvalidType,
-			wantErrMsg: "msg must be a struct, got int",
+			wantErrMsg: "cmd must be a struct, got int",
 		},
 		"handler not a func": {
 			cmd:        struct{}{},
@@ -267,8 +267,8 @@ func TestInvoke(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	assert.Equal(t, providerExecuted, 5)
-	assert.Equal(t, handlerExecuted, 5)
+	assert.Equal(t, 5, providerExecuted)
+	assert.Equal(t, 5, handlerExecuted)
 }
 
 func TestInvokeFails(t *testing.T) {
@@ -394,6 +394,7 @@ func TestPublish_SingleListener(t *testing.T) {
 	bus.Subscribe(Event{}, listener)
 	done, errchan := bus.Publish(context.Background(), Event{})
 	<-done
+
 	assert.Len(t, errchan, 0)
 	assert.Equal(t, eventTriggered, 1)
 }
@@ -533,7 +534,7 @@ func TestExec_Singleton(t *testing.T) {
 	assert.Equal(t, 5, handlerExecuted)
 }
 
-func TestExec_SingletonRace(t *testing.T) {
+func TestExec_Concurrent(t *testing.T) {
 	bus := New()
 
 	var providerExecuted int
@@ -545,10 +546,12 @@ func TestExec_SingletonRace(t *testing.T) {
 	errchan := make(chan error)
 	wg := sync.WaitGroup{}
 	wg.Add(5)
+	start := make(chan struct{})
 	for i := 0; i < 5; i++ {
 		go func() {
+			<-start
+			defer wg.Done()
 			err := bus.Exec(context.Background(), func(s GetIntService) error {
-				defer wg.Done()
 				assert.NotNil(t, s)
 				return nil
 			})
@@ -558,6 +561,7 @@ func TestExec_SingletonRace(t *testing.T) {
 		}()
 	}
 
+	close(start)
 	wg.Wait()
 	assert.Len(t, errchan, 0)
 	assert.Equal(t, 1, providerExecuted)

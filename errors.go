@@ -1,5 +1,7 @@
 package van
 
+import "fmt"
+
 var (
 	errInvalidType      = newError("invalid type")
 	errProviderNotFound = newError("provider not found")
@@ -19,6 +21,10 @@ func (err *localError) new(msg string) *localError {
 		parent: err,
 		msg:    msg,
 	}
+}
+
+func (err *localError) fmt(format string, a ...interface{}) *localError {
+	return err.new(fmt.Sprintf(format, a...))
 }
 
 func (err *localError) Error() string {
