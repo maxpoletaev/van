@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-pkgname = github.com/maxpoletaev/van
+PKGNAME = github.com/maxpoletaev/van
 
 .PHONY: help
 help:
@@ -13,6 +13,10 @@ test:  ## run go tests
 
 .PHONY: bench
 bench:  ## run benchmarks
+	go test -bench=. -run=^$$ -benchmem
+
+.PHONY: benchprof
+benchprof: ## run benchmarks with profiling
 	go test -bench=. -run=^$$ -benchmem -cpuprofile=cpu.pprof -memprofile=mem.pprof
 
 .PHONY: benchcmp
@@ -21,16 +25,16 @@ benchcmp:  ## run benchmarks and compare with the previous benchcmp run
 	@benchstat bench.old.txt bench.txt
 
 .PHONY: newbenchcmp
-newbenchcmp:  ## run benchmarks and compare with the previous benchcmp run
+newbenchcmp:  ## run benchmarks and create new compare file
 	[ -f bench.txt ] && mv bench.txt bench.old.txt || true
 	go test -bench=. -run=^$$ -benchmem > bench.txt
 	@benchstat bench.old.txt bench.txt
 
 .PHONY: godoc
 godoc:  ## start godoc server at :8000
-	@(sleep 1; open http://localhost:8000/pkg/$(pkgname)) &
+	@(sleep 1; open http://localhost:8000/pkg/$(PKGNAME)) &
 	@godoc -http=127.0.0.1:8000
 
 .PHONY: lint
-lint:  ## Run linter
+lint:  ## run linter
 	golangci-lint run -E gofmt,unparam,prealloc

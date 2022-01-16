@@ -141,9 +141,9 @@ func (b *busImpl) Invoke(ctx context.Context, cmd interface{}) error {
 		return errProviderNotFound.fmt("no handlers found for type %s", cmdType.String())
 	}
 
-	handlerValue := reflect.ValueOf(handler)
-	args := make([]reflect.Value, handlerValue.Type().NumIn())
-	err := b.resolve(ctx, cmd, handlerValue, args)
+	handlerType := reflect.TypeOf(handler)
+	args := make([]reflect.Value, handlerType.NumIn())
+	err := b.resolve(ctx, cmd, handlerType, args)
 	if err != nil {
 		return err
 	}
@@ -151,7 +151,7 @@ func (b *busImpl) Invoke(ctx context.Context, cmd interface{}) error {
 	b.runnig.Add(1)
 	defer b.runnig.Done()
 
-	ret := handlerValue.Call(args)
+	ret := reflect.ValueOf(handler).Call(args)
 	return toError(ret[0])
 }
 
@@ -208,10 +208,10 @@ func (b *busImpl) Publish(ctx context.Context, event interface{}) (done chan str
 
 	wg := &sync.WaitGroup{}
 	errchan = make(chan error, len(listeners))
-	for _, listener := range listeners {
-		listenerValue := reflect.ValueOf(listener)
-		args := make([]reflect.Value, listenerValue.Type().NumIn())
-		err := b.resolve(ctx, event, listenerValue, args)
+	for i := range listeners {
+		listenerType := reflect.TypeOf(listeners[i])
+		args := make([]reflect.Value, listenerType.NumIn())
+		err := b.resolve(ctx, event, listenerType, args)
 		if err != nil {
 			errchan <- err
 			continue
@@ -219,15 +219,14 @@ func (b *busImpl) Publish(ctx context.Context, event interface{}) (done chan str
 
 		wg.Add(1)
 		b.runnig.Add(1)
-		go func() {
+		go func(i int) {
 			defer wg.Done()
 			defer b.runnig.Done()
-
-			ret := listenerValue.Call(args)
+			ret := reflect.ValueOf(listeners[i]).Call(args)
 			if err := toError(ret[0]); err != nil {
 				errchan <- err
 			}
-		}()
+		}(i)
 	}
 
 	go func() {
@@ -260,19 +259,17 @@ func (b *busImpl) Exec(ctx context.Context, fn interface{}) error {
 		}
 	}
 
-	funcValue := reflect.ValueOf(fn)
 	args := make([]reflect.Value, funcType.NumIn())
-	err := b.resolve(ctx, nil, funcValue, args)
+	err := b.resolve(ctx, nil, funcType, args)
 	if err != nil {
 		return err
 	}
 
-	ret := funcValue.Call(args)
+	ret := reflect.ValueOf(fn).Call(args)
 	return toError(ret[0])
 }
 
-func (b *busImpl) resolve(ctx context.Context, cmd interface{}, funcValue reflect.Value, args []reflect.Value) error {
-	funcType := funcValue.Type()
+func (b *busImpl) resolve(ctx context.Context, cmd interface{}, funcType reflect.Type, args []reflect.Value) error {
 	for i := 0; i < funcType.NumIn(); i++ {
 		argType := funcType.In(i)
 		switch {
@@ -306,18 +303,17 @@ func (b *busImpl) new(ctx context.Context, t reflect.Type) (reflect.Value, error
 	}
 
 	providerType := reflect.TypeOf(provider.fn)
-	providerValue := reflect.ValueOf(provider.fn)
-
 	numIn := providerType.NumIn()
 	var args []reflect.Value
 	if numIn > 0 {
 		args = make([]reflect.Value, numIn)
-		err := b.resolve(ctx, nil, providerValue, args)
+		err := b.resolve(ctx, nil, providerType, args)
 		if err != nil {
 			return reflect.ValueOf(nil), err
 		}
 	}
 
+	providerValue := reflect.ValueOf(provider.fn)
 	if provider.singleton {
 		return func() (reflect.Value, error) {
 			b.instancesMu.Lock()
