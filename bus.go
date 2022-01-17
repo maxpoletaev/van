@@ -9,7 +9,7 @@ import (
 
 type ProviderFunc interface{} // func(ctx context.Context, deps ...interface{}) (interface{}, error)
 type HandlerFunc interface{}  // func(ctx context.Context, cmd interface{}, deps ...interface{}) error
-type ListenerFunc interface{} // func(ctx context.Context, event interface{}, deps ...interface) error
+type ListenerFunc interface{} // func(ctx context.Context, event interface{}, deps ...interface)
 
 type providerOpts struct {
 	fn        ProviderFunc
@@ -199,33 +199,31 @@ func (b *busImpl) Publish(ctx context.Context, event interface{}) error {
 		return nil
 	}
 
-	wg := sync.WaitGroup{}
-	onceErr := sync.Once{}
-	var firstErr error
-
+	largs := make([][]reflect.Value, len(listeners))
 	for i := range listeners {
 		listenerType := reflect.TypeOf(listeners[i])
-		args := make([]reflect.Value, listenerType.NumIn())
-		err := b.resolve(ctx, event, listenerType, args)
-		if err != nil {
-			onceErr.Do(func() { firstErr = err })
-			continue
+		if numIn := listenerType.NumIn(); numIn > 0 {
+			largs[i] = make([]reflect.Value, numIn)
+			err := b.resolve(ctx, event, listenerType, largs[i])
+			if err != nil {
+				return err
+			}
 		}
+	}
 
+	wg := sync.WaitGroup{}
+	for i := range listeners {
 		wg.Add(1)
 		b.runnig.Add(1)
 		go func(i int) {
 			defer wg.Done()
 			defer b.runnig.Done()
-			ret := reflect.ValueOf(listeners[i]).Call(args)
-			if err := toError(ret[0]); err != nil {
-				onceErr.Do(func() { firstErr = err })
-			}
+			reflect.ValueOf(listeners[i]).Call(largs[i])
 		}(i)
 	}
 
 	wg.Wait()
-	return firstErr
+	return nil
 }
 
 func (b *busImpl) Exec(ctx context.Context, fn interface{}) error {
@@ -292,10 +290,9 @@ func (b *busImpl) new(ctx context.Context, t reflect.Type) (reflect.Value, error
 		b.instancesMu.RUnlock()
 	}
 
-	providerType := reflect.TypeOf(provider.fn)
-	numIn := providerType.NumIn()
 	var args []reflect.Value
-	if numIn > 0 {
+	providerType := reflect.TypeOf(provider.fn)
+	if numIn := providerType.NumIn(); numIn > 0 {
 		args = make([]reflect.Value, numIn)
 		err := b.resolve(ctx, nil, providerType, args)
 		if err != nil {
@@ -397,6 +394,8 @@ func (b *busImpl) validateListener(t reflect.Type) error {
 		return errInvalidType.fmt("handler's first argument must be context.Context, got %s", t.In(0).String())
 	case t.In(1).Kind() != reflect.Struct:
 		return errInvalidType.fmt("handler's second argument must be a struct, got %s", t.In(1).String())
+	case t.NumOut() != 0:
+		return errInvalidType.fmt("event handler should not have any return values")
 	}
 
 	// start from the third argument as the first two are always `ctx` and `cmd`

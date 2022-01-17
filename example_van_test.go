@@ -22,9 +22,8 @@ type HelloBeenSaidEvent struct {
 	Timestamp int64
 }
 
-func HelloBeenSaid(ctx context.Context, event HelloBeenSaidEvent) error {
+func HelloBeenSaid(ctx context.Context, event HelloBeenSaidEvent) {
 	fmt.Printf("Hello has been said to %s at %d", event.Name, event.Timestamp)
-	return nil
 }
 
 func ExampleVan() {

@@ -2,7 +2,6 @@ package van
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 
@@ -334,9 +333,8 @@ func TestInvokeFails_HandlerError(t *testing.T) {
 
 func TestHandleEvent(t *testing.T) {
 	bus := New().(*busImpl)
-	handler := func(ctx context.Context, event Event, b Van) error {
+	handler := func(ctx context.Context, event Event, b Van) {
 		assert.NotNil(t, b)
-		return nil
 	}
 	bus.Subscribe(Event{}, handler)
 	assert.Len(t, bus.listeners, 1)
@@ -352,24 +350,28 @@ func TestSubscribeFails(t *testing.T) {
 			wantErrMsg: "handler must be a function, got struct {}",
 		},
 		"not enough arguments": {
-			handler:    func() error { return nil },
+			handler:    func() {},
 			wantErrMsg: "handler must have at least 2 arguments, got 0",
 		},
 		"first argument not a context": {
-			handler:    func(ctx struct{}, event Event) error { return nil },
+			handler:    func(ctx struct{}, event Event) {},
 			wantErrMsg: "handler's first argument must be context.Context, got struct {}",
 		},
 		"second argument not a struct": {
-			handler:    func(ctx context.Context, event int) error { return nil },
+			handler:    func(ctx context.Context, event int) {},
 			wantErrMsg: "handler's second argument must be a struct, got int",
 		},
 		"dependency is not an interface": {
-			handler:    func(ctx context.Context, event Event, dep int) error { return nil },
+			handler:    func(ctx context.Context, event Event, dep int) {},
 			wantErrMsg: "handler's argument 2 must be an interface, got int",
 		},
 		"unknown provider": {
-			handler:    func(ctx context.Context, event Event, dep UnknownService) error { return nil },
+			handler:    func(ctx context.Context, event Event, dep UnknownService) {},
 			wantErrMsg: "no providers registered for type van.UnknownService",
+		},
+		"has return values": {
+			handler:    func(ctx context.Context, event Event) error { return nil },
+			wantErrMsg: "event handler should not have any return values",
 		},
 	}
 	bus := New()
@@ -386,9 +388,8 @@ func TestSubscribeFails(t *testing.T) {
 
 func TestPublish_SingleListener(t *testing.T) {
 	var eventTriggered int
-	listener := func(ctx context.Context, event Event) error {
+	listener := func(ctx context.Context, event Event) {
 		eventTriggered++
-		return nil
 	}
 
 	bus := New()
@@ -396,18 +397,16 @@ func TestPublish_SingleListener(t *testing.T) {
 	err := bus.Publish(context.Background(), Event{})
 
 	require.NoError(t, err)
-	assert.Equal(t, eventTriggered, 1)
+	assert.Equal(t, 1, eventTriggered)
 }
 
 func TestPublish_MultipleListeners(t *testing.T) {
 	var listenerACalled, listenerBCalled int
-	listenerA := func(ctx context.Context, event Event) error {
+	listenerA := func(ctx context.Context, event Event) {
 		listenerACalled++
-		return nil
 	}
-	listenerB := func(ctx context.Context, event Event) error {
+	listenerB := func(ctx context.Context, event Event) {
 		listenerBCalled++
-		return nil
 	}
 
 	bus := New()
@@ -415,28 +414,8 @@ func TestPublish_MultipleListeners(t *testing.T) {
 	err := bus.Publish(context.Background(), Event{})
 
 	require.NoError(t, err)
-	assert.Equal(t, listenerACalled, 1)
-	assert.Equal(t, listenerBCalled, 1)
-}
-
-func TestPublish_ListenerFails(t *testing.T) {
-	var eventTriggered int
-	listener := func(ctx context.Context, event Event) error {
-		eventTriggered++
-		return nil
-	}
-
-	listenerErr := errors.New("arbitrary error")
-	badListener := func(ctx context.Context, event Event) error {
-		return listenerErr
-	}
-
-	bus := New()
-	bus.Subscribe(Event{}, badListener, listener)
-	err := bus.Publish(context.Background(), Event{})
-
-	assert.Equal(t, eventTriggered, 1)
-	assert.Equal(t, listenerErr, err)
+	assert.Equal(t, 1, listenerACalled)
+	assert.Equal(t, 1, listenerBCalled)
 }
 
 func TestPublish_ProviderFails(t *testing.T) {
@@ -446,9 +425,8 @@ func TestPublish_ProviderFails(t *testing.T) {
 		providerExecuted++
 		return nil, assert.AnError
 	})
-	bus.Subscribe(Event{}, func(ctx context.Context, event Event, s GetIntService) error {
+	bus.Subscribe(Event{}, func(ctx context.Context, event Event, s GetIntService) {
 		handlerExecuted++
-		return nil
 	})
 	err := bus.Publish(context.Background(), Event{})
 	assert.ErrorIs(t, err, assert.AnError)

@@ -40,10 +40,8 @@ if err := bus.Invoke(ctx, cmd); err != nil {
  * Event is a broadcast message informing that something has happened.
  * Events are simple DTO objects without behaviour.
  * Events are processed asynchronously.
- * Events are immutable and cannot have return values.
+ * Events are immutable and cannot be modified by listeners.
  * Each event may have a zero to infinity number of listeners.
- * A failing listener doesn’t prevent other event listeners from processing the event.
- * Only the first error is returned, even though there might be more than one failing listener.
 
 ```go
 // define event struct
@@ -53,9 +51,8 @@ type OrderCreatedEvent struct {
 }
 
 // register event listener
-func OrderCreated(ctx *context.Context, event OrderCreatedEvent) error {
+func OrderCreated(ctx *context.Context, event OrderCreatedEvent) {
 	log.Printf("[INFO] order %d created at %d", event.OrderID, event.Ts)
-	return nil
 }
 bus.Subscribe(OrderCreatedEvent{}, OrderCreated)
 
@@ -66,7 +63,7 @@ event := OrderCreatedEvent{
 }
 ctx := context.Background()
 if err := bus.Publish(ctx, event); err != nil {
-	log.Printf("[ERROR] failed while processing an event: %v", err)
+	log.Printf("[ERROR] failed to publishing an event: %v", err)
 }
 ```
 
@@ -106,7 +103,9 @@ bus.Provide(newUserRepoProvider(db))
  * Handler is a function associated with a command or an event.
  * Handlers take at least two arguments: context and command/event struct.
  * Handlers may have dependencies provided in extra arguments.
- * Handlers cannot return values, except for error.
+ * Command handler can return an error which will propagated to the caller as is.
+ * Event handlers cannot return any values, and there is no way to propagate the
+   error to the caller. Error handling should be done in place and logged if necessary.
 
 ```go
 func PrintHelloWorld(ctx context.Context, cmd *PrintHelloWorldCommand, logger Logger, bus van.Van) error {
@@ -115,9 +114,8 @@ func PrintHelloWorld(ctx context.Context, cmd *PrintHelloWorldCommand, logger Lo
 	return nil
 }
 
-func HelloWorldPrinted(ctx context.Context, event HelloWorldPrintedEvent, logger Logger) error {
+func HelloWorldPrinted(ctx context.Context, event HelloWorldPrintedEvent, logger Logger) {
 	logger.Print("hello world has been printed")
-	return nil
 }
 ```
 
