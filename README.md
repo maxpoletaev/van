@@ -16,22 +16,22 @@ ALPHA. There might be breaking API changes in future versions.
  * Commands are mutable. Handlers can modify command structs to provide return values.
 
 ```go
+// define command struct
 type PrintHelloCommand struct {
 	Name string
 }
 
+// register command handler
 func PrintHello(ctx context.Context, cmd *PrintHelloCommand) error {
-	fmt.Printf("Hello, %s!\n", cmd.Name)
+	log.Printf("Hello, %s!", cmd.Name)
 }
-
-// Register command handler
 bus.Handle(PrintHelloCommand{}, PrintHello)
 
-// Send command to the bus
+// send command to the bus
+ctx := context.Background()
 cmd := &PrintHelloCommand{Name: "Harry"}
-err := bus.Invoke(context.Background(), cmd)
-if err != nil {
-	panic(err)
+if err := bus.Invoke(ctx, cmd); err != nil {
+	log.Printf("[ERROR] failed to print hello: %v", err)
 }
 ```
 
@@ -43,38 +43,30 @@ if err != nil {
  * Events are immutable and cannot have return values.
  * Each event may have a zero to infinity number of listeners.
  * A failing listener doesn’t prevent other event listeners from processing the event.
+ * Only the first error is returned, even though there might be more than one failing listener.
 
 ```go
+// define event struct
 type OrderCreatedEvent struct {
-	OrderID	  string
-	Timestamp int64
+	OrderID	int
+	Ts      int64
 }
 
+// register event listener
 func OrderCreated(ctx *context.Context, event OrderCreatedEvent) error {
-	fmt.Printf("order created: %d", event.OrderID)
+	log.Printf("[INFO] order %d created at %d", event.OrderID, event.Ts)
 	return nil
 }
-
-// Register event handler
 bus.Subscribe(OrderCreatedEvent{}, OrderCreated)
 
-// Publish event to the bus
+// publish event to the bus
 event := OrderCreatedEvent{
-	OrderID:   "ord-134",
-	Timestamp: time.Now().Unix(),
+	OrderID: 134,
+	Ts:      time.Now().Unix(),
 }
-bus.Publish(context.Background(), event)
-```
-
-Since events asynchronous, they are not supposed to return anything or report about thier execution state. Van, however, let’s the programmer to wait for the event to be processed, therefore converting it to a synchronous call, if needed:
-
-```go
-done, errchan := bus.Publish(ctx, event)
-select {
-case <-done:
-	return nil
-case err := <-errchan:
-	return err
+ctx := context.Background()
+if err := bus.Publish(ctx, event); err != nil {
+	log.Printf("[ERROR] failed while processing an event: %v", err)
 }
 ```
 
@@ -83,23 +75,36 @@ case err := <-errchan:
  * Provider is essentially a constructor of an arbitrary type.
  * Provider should return an interface and an error.
  * Providers can depend on other providers.
- * Providers can be either transitive (executed every time the dep is requested), or signletons.
- * There is no such thing as "optional dependency", provider should panic if it can’t provide one.
+ * Providers can be either transitive (executed every time the dependency is requested), or signletons.
+ * There is no such thing as "optional dependency", provider must return an error if it can’t provide one.
 
 ```go
+type Logger interface {
+	Printf(string, ...interface{})
+}
+
+// singleton provider is guaranteed to be executed not more than once
 bus.ProvideSingleton(func() (Logger, error) {
-	return &logging.DumbStdoutLogger{}
+	flags := log.LstdFlags | log.LUTC | log.Lshortfile
+	return log.New(os.Stdout, "", flags)
 })
 
-bus.Provide(func(ctx context.Context, logger Logger) (UserRepository, error) {
-	return &PostgresUserRepo{Logger: logger}
-})
+// transitive provider is executed every time the dependency is requested
+// here we initialize new database connection every time UserRepo is used as a dependency
+func newUserRepoProvider(db *sql.DB) interface{} {
+	return func(ctx context.Context, logger Logger) (UserRepo, error) {
+		conn := db.Conn(ctx) // TODO: make sure context is cancelled
+		return newPostgresUserRepo(conn, logger)
+	}
+}
+db := sql.Open("postgres", "...")
+bus.Provide(newUserRepoProvider(db))
 ```
 
 ## Handlers
 
  * Handler is a function associated with a command or an event.
- * Handlers should have at least two arguments: context and command/event struct.
+ * Handlers take at least two arguments: context and command/event struct.
  * Handlers may have dependencies provided in extra arguments.
  * Handlers cannot return values, except for error.
 
@@ -107,12 +112,12 @@ bus.Provide(func(ctx context.Context, logger Logger) (UserRepository, error) {
 func PrintHelloWorld(ctx context.Context, cmd *PrintHelloWorldCommand, logger Logger, bus van.Van) error {
 	logger.Print("Hello, World!")
 	bus.Publish(ctx, HelloWorldPrintedEvent{})
-	return
+	return nil
 }
 
- func HelloWorldPrinted(ctx context.Context, event HelloWorldPrintedEvent, logger Logger) error {
+func HelloWorldPrinted(ctx context.Context, event HelloWorldPrintedEvent, logger Logger) error {
 	logger.Print("hello world has been printed")
-	return
+	return nil
 }
 ```
 
@@ -177,27 +182,13 @@ func Sum(ctx context.Context, cmd *SumCommand) error {
 	return nil
 }
 
+ctx := context.Background()
 cmd := &SumCommand{A: 1, B: 2}
-err := bus.Invoke(context.Background(), cmd)
-if err != nil {
+if err := bus.Invoke(ctx, cmd); err != nil {
 	panic(err)
 }
 
 println(cmd.Result) // 3
-```
-
-## How do I create a parametrized provider?
-
-Create a wrapper function for your provider:
-
-```go
-func newLoggerProvider(logLevel string) interface{} {
-	return func() Logger {
-		return &SimpleLogger{Level: logLevel}
-	}
-}
-
-bus.Provide(newLoggerProvider("INFO"))
 ```
 
 ## Can I have multiple providers for the same type?
@@ -206,10 +197,18 @@ Not really, but you can create a type alias:
 
 ```go
 type Logger interface {
-    Print(string)
+    Printf(string)
 }
-type Logger2 Logger
 
-bus.Provide(func() Logger { logging.NewLogger() })
-bus.Provide(func() Logger2 { logging.NewLogger() })
+type ErrorLogger ErrorLogger
+
+bus.ProvideSingleton(func() (Logger, error) {
+	flags := log.LstdFlags | log.LUTC
+	return log.New(os.Stdout, "", flags), nil
+})
+
+bus.ProvideSingleton(func() (ErrorLogger, error) {
+	flags := log.LstdFlags | log.LUTC | log.Llongfile
+	return logging.NewLogger(os.Stderr, "[ERROR] ", flags), nil
+})
 ```
