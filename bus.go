@@ -43,8 +43,9 @@ type Van interface {
 	// Invoke runs an associated command handler.
 	Invoke(ctx context.Context, cmd interface{}) error
 
-	// Publish sends an event to the bus. Each listener is executed concurrently and can fail independently.
-	Publish(ctx context.Context, event interface{}) (chan struct{}, chan error)
+	// Publish sends an event to the bus. Listeners are executed concurrently and can fail independently.
+	// Only the first error is returned, even though there might be more than one failing listener.
+	Publish(ctx context.Context, event interface{}) error
 
 	// Exec executes the given function inside the dependency injector.
 	Exec(ctx context.Context, fn interface{}) error
@@ -187,33 +188,27 @@ func (b *busImpl) registerListener(event interface{}, listener ListenerFunc) err
 	return nil
 }
 
-func (b *busImpl) Publish(ctx context.Context, event interface{}) (done chan struct{}, errchan chan error) {
-	done = make(chan struct{})
-	errchan = make(chan error, 1)
-
+func (b *busImpl) Publish(ctx context.Context, event interface{}) error {
 	eventType := reflect.TypeOf(event)
 	if eventType.Kind() != reflect.Struct {
-		errchan <- errInvalidType.fmt("event must be a a struct, got %s", eventType.Name())
-		close(done)
-		close(errchan)
-		return
+		return errInvalidType.fmt("event must be a a struct, got %s", eventType.Name())
 	}
 
 	listeners, ok := b.listeners[eventType]
 	if !ok {
-		close(done)
-		close(errchan)
-		return
+		return nil
 	}
 
-	wg := &sync.WaitGroup{}
-	errchan = make(chan error, len(listeners))
+	wg := sync.WaitGroup{}
+	onceErr := sync.Once{}
+	var firstErr error
+
 	for i := range listeners {
 		listenerType := reflect.TypeOf(listeners[i])
 		args := make([]reflect.Value, listenerType.NumIn())
 		err := b.resolve(ctx, event, listenerType, args)
 		if err != nil {
-			errchan <- err
+			onceErr.Do(func() { firstErr = err })
 			continue
 		}
 
@@ -224,18 +219,13 @@ func (b *busImpl) Publish(ctx context.Context, event interface{}) (done chan str
 			defer b.runnig.Done()
 			ret := reflect.ValueOf(listeners[i]).Call(args)
 			if err := toError(ret[0]); err != nil {
-				errchan <- err
+				onceErr.Do(func() { firstErr = err })
 			}
 		}(i)
 	}
 
-	go func() {
-		wg.Wait()
-		close(done)
-		close(errchan)
-	}()
-
-	return
+	wg.Wait()
+	return firstErr
 }
 
 func (b *busImpl) Exec(ctx context.Context, fn interface{}) error {

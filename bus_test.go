@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type Command struct {
@@ -392,10 +393,9 @@ func TestPublish_SingleListener(t *testing.T) {
 
 	bus := New()
 	bus.Subscribe(Event{}, listener)
-	done, errchan := bus.Publish(context.Background(), Event{})
-	<-done
+	err := bus.Publish(context.Background(), Event{})
 
-	assert.Len(t, errchan, 0)
+	require.NoError(t, err)
 	assert.Equal(t, eventTriggered, 1)
 }
 
@@ -412,9 +412,9 @@ func TestPublish_MultipleListeners(t *testing.T) {
 
 	bus := New()
 	bus.Subscribe(Event{}, listenerA, listenerB)
-	done, errchan := bus.Publish(context.Background(), Event{})
-	<-done
-	assert.Len(t, errchan, 0)
+	err := bus.Publish(context.Background(), Event{})
+
+	require.NoError(t, err)
 	assert.Equal(t, listenerACalled, 1)
 	assert.Equal(t, listenerBCalled, 1)
 }
@@ -433,12 +433,10 @@ func TestPublish_ListenerFails(t *testing.T) {
 
 	bus := New()
 	bus.Subscribe(Event{}, badListener, listener)
-	done, errchan := bus.Publish(context.Background(), Event{})
-	<-done
+	err := bus.Publish(context.Background(), Event{})
 
 	assert.Equal(t, eventTriggered, 1)
-	assert.Len(t, errchan, 1)
-	assert.Equal(t, listenerErr, <-errchan)
+	assert.Equal(t, listenerErr, err)
 }
 
 func TestPublish_ProviderFails(t *testing.T) {
@@ -452,11 +450,8 @@ func TestPublish_ProviderFails(t *testing.T) {
 		handlerExecuted++
 		return nil
 	})
-	done, errchan := bus.Publish(context.Background(), Event{})
-	<-done
-
-	assert.Len(t, errchan, 1)
-	assert.ErrorIs(t, <-errchan, assert.AnError)
+	err := bus.Publish(context.Background(), Event{})
+	assert.ErrorIs(t, err, assert.AnError)
 	assert.Equal(t, 1, providerExecuted)
 	assert.Equal(t, 0, handlerExecuted)
 }
