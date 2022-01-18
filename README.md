@@ -102,7 +102,7 @@ bus.Provide(newUserRepoProvider(db))
 
  * Handler is a function associated with a command or an event.
  * Handlers take at least two arguments: context and command/event struct.
- * Handlers may have dependencies provided in extra arguments.
+ * Handlers may have dependencies provided in extra arguments as interfaces.
  * Command handler can return an error which will propagated to the caller as is.
  * Event handlers cannot return any values, and there is no way to propagate the
    error to the caller. Error handling should be done in place and logged if necessary.

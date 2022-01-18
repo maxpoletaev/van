@@ -233,7 +233,7 @@ func (b *busImpl) Exec(ctx context.Context, fn interface{}) error {
 		return errInvalidType.fmt("fn should be a function, got %s", funcType.String())
 	case funcType.NumOut() != 1:
 		return errInvalidType.fmt("fn must have one return value, got %s", fmt.Sprint(funcType.NumOut()))
-	case !isError(funcType.Out(0)):
+	case !funcType.Out(0).Implements(typeError):
 		return errInvalidType.fmt("return value must be an error, got %s", funcType.Out(0).String())
 	}
 
@@ -261,11 +261,11 @@ func (b *busImpl) resolve(ctx context.Context, cmd interface{}, funcType reflect
 	for i := 0; i < funcType.NumIn(); i++ {
 		argType := funcType.In(i)
 		switch {
-		case i == 0 && isContext(argType):
+		case i == 0 && argType == typeContext:
 			args[i] = reflect.ValueOf(ctx)
 		case i == 1 && argType == reflect.TypeOf(cmd):
 			args[i] = reflect.ValueOf(cmd)
-		case isBusItself(argType):
+		case argType == typeVan:
 			args[i] = reflect.ValueOf(b)
 		case argType.Kind() == reflect.Interface:
 			instance, err := b.new(ctx, argType)
@@ -337,7 +337,7 @@ func (b *busImpl) validateProviderType(t reflect.Type) error {
 		return errInvalidType.fmt("provider must have two return values, got %d", t.NumOut())
 	case t.Out(0).Kind() != reflect.Interface:
 		return errInvalidType.fmt("provider's first return value must be an interface, got %s", t.Out(0).String())
-	case !isError(t.Out(1)):
+	case !t.Out(1).Implements(typeError):
 		return errInvalidType.fmt("provider's second return value must be an error, got %s", t.Out(1).String())
 	}
 
@@ -360,13 +360,13 @@ func (b *busImpl) validateHandlerType(t reflect.Type) error {
 		return errInvalidType.fmt("handler must be a function, got %s", t.String())
 	case t.NumIn() < 2:
 		return errInvalidType.fmt("handler must have at least 2 arguments, got %s", fmt.Sprint(t.NumIn()))
-	case !isContext(t.In(0)):
+	case t.In(0) != typeContext:
 		return errInvalidType.fmt("handler's first argument must be context.Context, got %s", t.In(0).String())
 	case !isStructPtr(t.In(1)):
 		return errInvalidType.fmt("handler's second argument must be a struct pointer, got %s", t.In(1).String())
 	case t.NumOut() != 1:
 		return errInvalidType.fmt("handler must have one return value, got %s", fmt.Sprint(t.NumOut()))
-	case !isError(t.Out(0)):
+	case !t.Out(0).Implements(typeError):
 		return errInvalidType.fmt("handler's return type must be error, got %s", t.Out(0).String())
 	}
 
@@ -390,7 +390,7 @@ func (b *busImpl) validateListener(t reflect.Type) error {
 		return errInvalidType.fmt("handler must be a function, got %s", t.String())
 	case t.NumIn() < 2:
 		return errInvalidType.fmt("handler must have at least 2 arguments, got %s", fmt.Sprint(t.NumIn()))
-	case !isContext(t.In(0)):
+	case t.In(0) != typeContext:
 		return errInvalidType.fmt("handler's first argument must be context.Context, got %s", t.In(0).String())
 	case t.In(1).Kind() != reflect.Struct:
 		return errInvalidType.fmt("handler's second argument must be a struct, got %s", t.In(1).String())
@@ -413,8 +413,7 @@ func (b *busImpl) validateListener(t reflect.Type) error {
 }
 
 func (b *busImpl) hasProvider(t reflect.Type) bool {
-	_, ok := b.providers[t]
-	if ok || isBusItself(t) || isContext(t) {
+	if _, ok := b.providers[t]; ok || t == typeVan || t == typeContext {
 		return true
 	}
 	return false
