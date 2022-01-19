@@ -123,46 +123,65 @@ func HelloWorldPrinted(ctx context.Context, event HelloWorldPrintedEvent, logger
 
 Well, yeah... Although it tries to do most of the checks during the start up, it’s still slow as hell due to reflection magic under the hood used for dynamically-constructed function arguments, the most painful of which is `reflect.Value.Call()`.
 
-The following benchmark shows that simple dynamic function calls in Go are about 1000 times slower than static function calls, and this is even without the dependency-injection overhead involved.
+The following benchmark shows that simple dynamic function calls in Go can be 10 to 1000 times slower than static function calls, and this is even without the dependency-injection overhead involved.
 
 ```
 goos: darwin
 goarch: amd64
 pkg: github.com/maxpoletaev/van
 cpu: Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz
-BenchmarkFuncCallStatic-12        	1000000000	   0.2447 ns/op	       0 B/op	       0 allocs/op
-BenchmarkFuncCallReflection-12    	5328840	       222.5 ns/op	      32 B/op	       2 allocs/op
+BenchmarkFuncCallNative-12        	1000000000	         0.2464 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFuncCallNativeHeap-12    	  53380869	          20.92 ns/op	      16 B/op	       1 allocs/op
+BenchmarkFuncCallReflection-12    	   4695636	          250.9 ns/op	      32 B/op	       2 allocs/op
 ```
 
 <details>
 <summary>Benchmark code</summary>
 
 ```go
-func BenchmarkFuncCallStatic(b *testing.B) {
+func div(a, b float64) float64 {
+	return a / b
+}
+
+func BenchmarkFuncCallNative(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		math.Sqrt(float64(100000))
+		div(float64(987654.321), float64(123456.789))
+	}
+}
+
+func BenchmarkFuncCallNativeHeap(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		// make a heap allocation in each iteration to simulate
+		// the behaviour similar to the reflection call
+		args := make([]float64, 0)
+		args = append(args, float64(987654.321), float64(123456.789))
+		div(args[0], args[1])
 	}
 }
 
 func BenchmarkFuncCallReflection(b *testing.B) {
-	args := []reflect.Value{reflect.ValueOf(float64(100000))}
-	sqrt := reflect.ValueOf(math.Sqrt)
+	args := []reflect.Value{
+		reflect.ValueOf(float64(987654.321)),
+		reflect.ValueOf(float64(123456.789)),
+	}
+	divfn := reflect.ValueOf(div)
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		sqrt.Call(args)
+		divfn.Call(args)
 	}
 }
 ```
 </details>
 
-The key is to use singletons whenever possible to avoid cascade `reflect.Value.Call()` calls. This is far from ideal but ten times faster:
+To reduce the numbe of reflection calls, use singleons whenever possible. This is far from ideal but can be up to ten times faster:
 
 ```
-BenchmarkInvoke-12                	   82945	     13932 ns/op	    3640 B/op	     145 allocs/op
-BenchmarkInvoke_Singletons-12     	  691203	      1729 ns/op	     352 B/op	      11 allocs/op
+BenchmarkInvoke_Transitive-12        	   80292	     13556 ns/op	    2816 B/op	     128 allocs/op
+BenchmarkInvoke_Singletons-12        	  618997	      1766 ns/op	     176 B/op	      10 allocs/op
 ```
 
-I mean, it is not extremely bad, given the fact that we are still in the microseconds scale. However, it is better to stay away if performance is the priority.
+I mean, the whole picture is not extremely bad, given the fact that we are still in the microseconds scale. However, it is better to stay away from any kinds of reflection if performance is the priority.
 
 ## How do I return a value from a command handler?
 

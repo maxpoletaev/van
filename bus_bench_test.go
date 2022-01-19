@@ -2,7 +2,6 @@ package van
 
 import (
 	"context"
-	"math"
 	"reflect"
 	"testing"
 )
@@ -24,7 +23,7 @@ type benchCommand struct {
 
 func (s *serviceImpl) Run() int { return s.ret }
 
-func BenchmarkInvoke(b *testing.B) {
+func BenchmarkInvoke_Transitive(b *testing.B) {
 	bus := New()
 	bus.Provide(func() (serviceA, error) {
 		return &serviceImpl{ret: 1}, nil
@@ -58,27 +57,6 @@ func BenchmarkInvoke(b *testing.B) {
 	}
 }
 
-func BenchmarkInvoke_SingleProvider(b *testing.B) {
-	bus := New()
-	bus.Provide(func() (serviceA, error) {
-		return &serviceImpl{ret: 1}, nil
-	})
-	bus.Handle(benchCommand{}, func(ctx context.Context, cmd *benchCommand, a serviceA) error {
-		return nil
-	})
-
-	ctx := context.Background()
-	var err error
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		err = bus.Invoke(ctx, &benchCommand{val: i})
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
 func BenchmarkInvoke_Singletons(b *testing.B) {
 	bus := New()
 	bus.ProvideSingleton(func() (serviceA, error) {
@@ -104,6 +82,27 @@ func BenchmarkInvoke_Singletons(b *testing.B) {
 	var err error
 
 	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		err = bus.Invoke(ctx, &benchCommand{val: i})
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkInvoke_SingleProvider(b *testing.B) {
+	bus := New()
+	bus.Provide(func() (serviceA, error) {
+		return &serviceImpl{ret: 1}, nil
+	})
+	bus.Handle(benchCommand{}, func(ctx context.Context, cmd *benchCommand, a serviceA) error {
+		return nil
+	})
+
+	ctx := context.Background()
+	var err error
+	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		err = bus.Invoke(ctx, &benchCommand{val: i})
 		if err != nil {
@@ -144,17 +143,35 @@ func BenchmarkExec_Bus(b *testing.B) {
 	}
 }
 
-func BenchmarkFuncCallStatic(b *testing.B) {
+func div(a, b float64) float64 {
+	return a / b
+}
+
+func BenchmarkFuncCallNative(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		math.Sqrt(float64(100000))
+		div(float64(987654.321), float64(123456.789))
+	}
+}
+
+func BenchmarkFuncCallNativeHeap(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		// make a heap allocation in each iteration to simulate
+		// the behaviour similar to the reflection call
+		args := make([]float64, 0)
+		args = append(args, float64(987654.321), float64(123456.789))
+		div(args[0], args[1])
 	}
 }
 
 func BenchmarkFuncCallReflection(b *testing.B) {
-	sqrt := reflect.ValueOf(math.Sqrt)
-	args := []reflect.Value{reflect.ValueOf(float64(100000))}
+	args := []reflect.Value{
+		reflect.ValueOf(float64(987654.321)),
+		reflect.ValueOf(float64(123456.789)),
+	}
+	divfn := reflect.ValueOf(div)
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		sqrt.Call(args)
+		divfn.Call(args)
 	}
 }
