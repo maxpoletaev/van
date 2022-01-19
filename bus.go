@@ -60,9 +60,9 @@ type busImpl struct {
 	handlers    map[reflect.Type]HandlerFunc
 	listeners   map[reflect.Type][]HandlerFunc
 	instances   map[reflect.Type]interface{}
-	argsPool    *argPool
 	instancesMu sync.RWMutex
 	runnig      sync.WaitGroup
+	argPool     *argPool
 }
 
 func New() Van {
@@ -71,7 +71,7 @@ func New() Van {
 	b.handlers = make(map[reflect.Type]HandlerFunc)
 	b.listeners = make(map[reflect.Type][]HandlerFunc)
 	b.instances = make(map[reflect.Type]interface{})
-	b.argsPool = newPool()
+	b.argPool = newPool()
 	b.runnig = sync.WaitGroup{}
 	return b
 }
@@ -81,25 +81,33 @@ func (b *busImpl) Wait() {
 }
 
 func (b *busImpl) Provide(provider ProviderFunc) {
-	providerType := reflect.TypeOf(provider)
-	if err := b.validateProviderType(providerType); err != nil {
-		panic(err)
-	}
-
-	retType := providerType.Out(0)
-	b.providers[retType] = providerOpts{fn: provider}
+	b.registerProvider(provider, false)
 }
 
 func (b *busImpl) ProvideSingleton(provider ProviderFunc) {
+	b.registerProvider(provider, true)
+}
+
+func (b *busImpl) registerProvider(provider ProviderFunc, signleton bool) {
 	providerType := reflect.TypeOf(provider)
-	if err := b.validateProviderType(providerType); err != nil {
+	if err := validateProviderType(providerType); err != nil {
 		panic(err)
 	}
 
 	retType := providerType.Out(0)
+	for i := 0; i < providerType.NumIn(); i++ {
+		inType := providerType.In(i)
+		if inType == retType {
+			panic(errInvalidDependency.new("provider function has a dependency of the same type"))
+		}
+		if !b.isValidDependency(providerType.In(i)) {
+			panic(errInvalidDependency.fmt("no providers registered for type %s", inType.String()))
+		}
+	}
+
 	b.providers[retType] = providerOpts{
+		singleton: signleton,
 		fn:        provider,
-		singleton: true,
 	}
 }
 
@@ -117,12 +125,20 @@ func (b *busImpl) registerHandler(cmd interface{}, handler HandlerFunc) error {
 	}
 
 	handlerType := reflect.TypeOf(handler)
-	if err := b.validateHandlerType(handlerType); err != nil {
+	if err := validateHandlerType(handlerType); err != nil {
 		return err
 	}
 
 	if cmdType != handlerType.In(1).Elem() {
-		return errInvalidType.new("command type mismatch")
+		return errInvalidDependency.new("command type mismatch")
+	}
+
+	// start from the third argument as the first two are always `ctx` and `cmd`
+	for i := 2; i < handlerType.NumIn(); i++ {
+		inType := handlerType.In(i)
+		if !b.isValidDependency(handlerType.In(i)) {
+			panic(errInvalidDependency.fmt("no providers registered for type %s", inType.String()))
+		}
 	}
 
 	b.handlers[cmdType] = handler
@@ -141,12 +157,12 @@ func (b *busImpl) Invoke(ctx context.Context, cmd interface{}) error {
 
 	handler, ok := b.handlers[cmdType]
 	if !ok {
-		return errProviderNotFound.fmt("no handlers found for type %s", cmdType.String())
+		return errInvalidDependency.fmt("no handlers found for type %s", cmdType.String())
 	}
 
 	handlerType := reflect.TypeOf(handler)
-	buf, args := b.argsPool.get(handlerType.NumIn())
-	defer b.argsPool.put(buf)
+	buf, args := b.argPool.get(handlerType.NumIn())
+	defer b.argPool.put(buf)
 
 	err := b.resolve(ctx, cmd, handlerType, args)
 	if err != nil {
@@ -176,12 +192,20 @@ func (b *busImpl) registerListener(event interface{}, listener ListenerFunc) err
 	}
 
 	listenerType := reflect.TypeOf(listener)
-	if err := b.validateListener(listenerType); err != nil {
+	if err := validateListenerType(listenerType); err != nil {
 		return err
 	}
 
 	if eventType != listenerType.In(1) {
 		return errInvalidType.new("event type mismatch")
+	}
+
+	// start from the third argument as the first two are always `ctx` and `event`
+	for i := 2; i < listenerType.NumIn(); i++ {
+		inType := listenerType.In(i)
+		if !b.isValidDependency(listenerType.In(i)) {
+			panic(errInvalidDependency.fmt("no providers registered for type %s", inType.String()))
+		}
 	}
 
 	if _, ok := b.listeners[eventType]; !ok {
@@ -222,8 +246,8 @@ func (b *busImpl) Publish(ctx context.Context, event interface{}) error {
 
 			listenerType := reflect.TypeOf(listeners[i])
 			if numIn := listenerType.NumIn(); numIn > 0 {
-				buf, args = b.argsPool.get(numIn)
-				defer b.argsPool.put(buf)
+				buf, args = b.argPool.get(numIn)
+				defer b.argPool.put(buf)
 
 				err := b.resolve(ctx, event, listenerType, args)
 				if err != nil {
@@ -256,13 +280,13 @@ func (b *busImpl) Exec(ctx context.Context, fn interface{}) error {
 		if argType.Kind() != reflect.Interface {
 			return errInvalidType.fmt("function argument %d is not an interface", i)
 		}
-		if !b.hasProvider(argType) {
-			return errProviderNotFound.fmt("no providers registered for type %s", argType.String())
+		if !b.isValidDependency(argType) {
+			return errInvalidDependency.fmt("no providers registered for type %s", argType.String())
 		}
 	}
 
-	buf, args := b.argsPool.get(funcType.NumIn())
-	defer b.argsPool.put(buf)
+	buf, args := b.argPool.get(funcType.NumIn())
+	defer b.argPool.put(buf)
 
 	err := b.resolve(ctx, nil, funcType, args)
 	if err != nil {
@@ -313,8 +337,8 @@ func (b *busImpl) new(ctx context.Context, t reflect.Type) (reflect.Value, error
 
 	providerType := reflect.TypeOf(provider.fn)
 	if numIn := providerType.NumIn(); numIn > 0 {
-		buf, args = b.argsPool.get(numIn)
-		defer b.argsPool.put(buf)
+		buf, args = b.argPool.get(numIn)
+		defer b.argPool.put(buf)
 
 		err := b.resolve(ctx, nil, providerType, args)
 		if err != nil {
@@ -351,7 +375,14 @@ func (b *busImpl) new(ctx context.Context, t reflect.Type) (reflect.Value, error
 	return ret[0], nil
 }
 
-func (b *busImpl) validateProviderType(t reflect.Type) error {
+func (b *busImpl) isValidDependency(t reflect.Type) bool {
+	if _, ok := b.providers[t]; ok || t == typeVan || t == typeContext {
+		return true
+	}
+	return false
+}
+
+func validateProviderType(t reflect.Type) error {
 	switch {
 	case t.Kind() != reflect.Func:
 		return errInvalidType.fmt("provider must be a function, got %s", t.String())
@@ -368,15 +399,12 @@ func (b *busImpl) validateProviderType(t reflect.Type) error {
 		if argType.Kind() != reflect.Interface {
 			return errInvalidType.fmt("provider's argument %d must be an interface, got %s", i, argType.String())
 		}
-		if !b.hasProvider(argType) {
-			return errProviderNotFound.fmt("no providers registered for type %s", argType.String())
-		}
 	}
 
 	return nil
 }
 
-func (b *busImpl) validateHandlerType(t reflect.Type) error {
+func validateHandlerType(t reflect.Type) error {
 	switch {
 	case t.Kind() != reflect.Func:
 		return errInvalidType.fmt("handler must be a function, got %s", t.String())
@@ -392,21 +420,17 @@ func (b *busImpl) validateHandlerType(t reflect.Type) error {
 		return errInvalidType.fmt("handler's return type must be error, got %s", t.Out(0).String())
 	}
 
-	// start from the third argument as the first two are always `ctx` and `cmd`
 	for i := 2; i < t.NumIn(); i++ {
 		argType := t.In(i)
 		if argType.Kind() != reflect.Interface {
 			return errInvalidType.fmt("handler's argument %d must be an interface, got %s", i, argType.String())
-		}
-		if !b.hasProvider(argType) {
-			return errProviderNotFound.fmt("no providers registered for type %s", argType.String())
 		}
 	}
 
 	return nil
 }
 
-func (b *busImpl) validateListener(t reflect.Type) error {
+func validateListenerType(t reflect.Type) error {
 	switch {
 	case t.Kind() != reflect.Func:
 		return errInvalidType.fmt("handler must be a function, got %s", t.String())
@@ -420,25 +444,14 @@ func (b *busImpl) validateListener(t reflect.Type) error {
 		return errInvalidType.fmt("event handler should not have any return values")
 	}
 
-	// start from the third argument as the first two are always `ctx` and `cmd`
 	for i := 2; i < t.NumIn(); i++ {
 		argType := t.In(i)
 		if argType.Kind() != reflect.Interface {
 			return errInvalidType.fmt("handler's argument %d must be an interface, got %s", i, argType.String())
 		}
-		if !b.hasProvider(argType) {
-			return errProviderNotFound.fmt("no providers registered for type %s", argType.String())
-		}
 	}
 
 	return nil
-}
-
-func (b *busImpl) hasProvider(t reflect.Type) bool {
-	if _, ok := b.providers[t]; ok || t == typeVan || t == typeContext {
-		return true
-	}
-	return false
 }
 
 func toError(v reflect.Value) error {

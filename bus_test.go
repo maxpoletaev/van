@@ -135,8 +135,15 @@ func TestProvideFails(t *testing.T) {
 			provider: func(s SetIntService) (GetIntService, error) {
 				return &GetIntServiceImpl{}, nil
 			},
-			wantErr:    errProviderNotFound,
+			wantErr:    errInvalidDependency,
 			wantErrMsg: "no providers registered for type van.SetIntService",
+		},
+		"dependency of the same type": {
+			provider: func(s SetIntService) (SetIntService, error) {
+				return s, nil
+			},
+			wantErr:    errInvalidDependency,
+			wantErrMsg: "provider function has a dependency of the same type",
 		},
 	}
 
@@ -224,7 +231,7 @@ func TestHandleFails(t *testing.T) {
 			handler: func(ctx context.Context, msg *struct{}, s SetIntService) error {
 				return nil
 			},
-			wantErr:    errProviderNotFound,
+			wantErr:    errInvalidDependency,
 			wantErrMsg: "no providers registered for type van.SetIntService",
 		},
 		"command type mismatch": {
@@ -232,7 +239,7 @@ func TestHandleFails(t *testing.T) {
 			handler: func(ctx context.Context, cmd *Command) error {
 				return nil
 			},
-			wantErr:    errInvalidType,
+			wantErr:    errInvalidDependency,
 			wantErrMsg: "command type mismatch",
 		},
 	}

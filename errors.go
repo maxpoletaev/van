@@ -3,8 +3,8 @@ package van
 import "fmt"
 
 var (
-	errInvalidType      = newError("invalid type")
-	errProviderNotFound = newError("provider not found")
+	errInvalidType       = newError("invalid type")
+	errInvalidDependency = newError("invalid dependency")
 )
 
 type localError struct {
