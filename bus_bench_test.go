@@ -46,11 +46,12 @@ func BenchmarkInvoke(b *testing.B) {
 	})
 
 	ctx := context.Background()
+	cmd := &benchCommand{val: 1}
 	var err error
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err = bus.Invoke(ctx, &benchCommand{val: i})
+		err = bus.Invoke(ctx, cmd)
 		if err != nil {
 			b.Fatal(err)
 		}

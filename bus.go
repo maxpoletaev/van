@@ -7,6 +7,8 @@ import (
 	"sync"
 )
 
+const argsSliceCap = 10
+
 type ProviderFunc interface{} // func(ctx context.Context, deps ...interface{}) (interface{}, error)
 type HandlerFunc interface{}  // func(ctx context.Context, cmd interface{}, deps ...interface{}) error
 type ListenerFunc interface{} // func(ctx context.Context, event interface{}, deps ...interface)
@@ -60,6 +62,7 @@ type busImpl struct {
 	handlers    map[reflect.Type]HandlerFunc
 	listeners   map[reflect.Type][]HandlerFunc
 	instances   map[reflect.Type]interface{}
+	argsPool    *valuePool
 	instancesMu sync.RWMutex
 	runnig      sync.WaitGroup
 }
@@ -70,6 +73,7 @@ func New() Van {
 	b.handlers = make(map[reflect.Type]HandlerFunc)
 	b.listeners = make(map[reflect.Type][]HandlerFunc)
 	b.instances = make(map[reflect.Type]interface{})
+	b.argsPool = newPool(argsSliceCap)
 	b.runnig = sync.WaitGroup{}
 	return b
 }
@@ -143,7 +147,9 @@ func (b *busImpl) Invoke(ctx context.Context, cmd interface{}) error {
 	}
 
 	handlerType := reflect.TypeOf(handler)
-	args := make([]reflect.Value, handlerType.NumIn())
+	buf, args := b.argsPool.get(handlerType.NumIn())
+	defer b.argsPool.put(buf)
+
 	err := b.resolve(ctx, cmd, handlerType, args)
 	if err != nil {
 		return err
@@ -199,31 +205,41 @@ func (b *busImpl) Publish(ctx context.Context, event interface{}) error {
 		return nil
 	}
 
-	largs := make([][]reflect.Value, len(listeners))
-	for i := range listeners {
-		listenerType := reflect.TypeOf(listeners[i])
-		if numIn := listenerType.NumIn(); numIn > 0 {
-			largs[i] = make([]reflect.Value, numIn)
-			err := b.resolve(ctx, event, listenerType, largs[i])
-			if err != nil {
-				return err
-			}
-		}
-	}
+	var firstErr error
+	firstErrOnce := sync.Once{}
 
 	wg := sync.WaitGroup{}
 	for i := range listeners {
 		wg.Add(1)
 		b.runnig.Add(1)
+
 		go func(i int) {
 			defer wg.Done()
 			defer b.runnig.Done()
-			reflect.ValueOf(listeners[i]).Call(largs[i])
+
+			var (
+				buf  *[]reflect.Value
+				args []reflect.Value
+			)
+
+			listenerType := reflect.TypeOf(listeners[i])
+			if numIn := listenerType.NumIn(); numIn > 0 {
+				buf, args = b.argsPool.get(numIn)
+				defer b.argsPool.put(buf)
+
+				err := b.resolve(ctx, event, listenerType, args)
+				if err != nil {
+					firstErrOnce.Do(func() { firstErr = err })
+					return
+				}
+			}
+
+			reflect.ValueOf(listeners[i]).Call(args)
 		}(i)
 	}
 
 	wg.Wait()
-	return nil
+	return firstErr
 }
 
 func (b *busImpl) Exec(ctx context.Context, fn interface{}) error {
@@ -247,7 +263,9 @@ func (b *busImpl) Exec(ctx context.Context, fn interface{}) error {
 		}
 	}
 
-	args := make([]reflect.Value, funcType.NumIn())
+	buf, args := b.argsPool.get(funcType.NumIn())
+	defer b.argsPool.put(buf)
+
 	err := b.resolve(ctx, nil, funcType, args)
 	if err != nil {
 		return err
@@ -290,10 +308,16 @@ func (b *busImpl) new(ctx context.Context, t reflect.Type) (reflect.Value, error
 		b.instancesMu.RUnlock()
 	}
 
-	var args []reflect.Value
+	var (
+		buf  *[]reflect.Value
+		args []reflect.Value
+	)
+
 	providerType := reflect.TypeOf(provider.fn)
 	if numIn := providerType.NumIn(); numIn > 0 {
-		args = make([]reflect.Value, numIn)
+		buf, args = b.argsPool.get(numIn)
+		defer b.argsPool.put(buf)
+
 		err := b.resolve(ctx, nil, providerType, args)
 		if err != nil {
 			return reflect.ValueOf(nil), err
