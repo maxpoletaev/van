@@ -7,8 +7,6 @@ import (
 	"sync"
 )
 
-const argsSliceCap = 10
-
 type ProviderFunc interface{} // func(ctx context.Context, deps ...interface{}) (interface{}, error)
 type HandlerFunc interface{}  // func(ctx context.Context, cmd interface{}, deps ...interface{}) error
 type ListenerFunc interface{} // func(ctx context.Context, event interface{}, deps ...interface)
@@ -62,7 +60,7 @@ type busImpl struct {
 	handlers    map[reflect.Type]HandlerFunc
 	listeners   map[reflect.Type][]HandlerFunc
 	instances   map[reflect.Type]interface{}
-	argsPool    *valuePool
+	argsPool    *argPool
 	instancesMu sync.RWMutex
 	runnig      sync.WaitGroup
 }
@@ -73,7 +71,7 @@ func New() Van {
 	b.handlers = make(map[reflect.Type]HandlerFunc)
 	b.listeners = make(map[reflect.Type][]HandlerFunc)
 	b.instances = make(map[reflect.Type]interface{})
-	b.argsPool = newPool(argsSliceCap)
+	b.argsPool = newPool()
 	b.runnig = sync.WaitGroup{}
 	return b
 }
