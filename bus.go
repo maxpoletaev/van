@@ -7,6 +7,8 @@ import (
 	"sync"
 )
 
+const maxArgsOnStack = 16
+
 type ProviderFunc interface{} // func(ctx context.Context, deps ...interface{}) (interface{}, error)
 type HandlerFunc interface{}  // func(ctx context.Context, cmd interface{}, deps ...interface{}) error
 type ListenerFunc interface{} // func(ctx context.Context, event interface{}, deps ...interface)
@@ -62,7 +64,6 @@ type busImpl struct {
 	instances   map[reflect.Type]interface{}
 	instancesMu sync.RWMutex
 	runnig      sync.WaitGroup
-	argPool     *argPool
 }
 
 func New() Van {
@@ -71,7 +72,6 @@ func New() Van {
 	b.handlers = make(map[reflect.Type]HandlerFunc)
 	b.listeners = make(map[reflect.Type][]HandlerFunc)
 	b.instances = make(map[reflect.Type]interface{})
-	b.argPool = newPool()
 	b.runnig = sync.WaitGroup{}
 	return b
 }
@@ -161,8 +161,16 @@ func (b *busImpl) Invoke(ctx context.Context, cmd interface{}) error {
 	}
 
 	handlerType := reflect.TypeOf(handler)
-	buf, args := b.argPool.get(handlerType.NumIn())
-	defer b.argPool.put(buf)
+	numIn := handlerType.NumIn()
+
+	var args []reflect.Value
+	if numIn <= maxArgsOnStack {
+		// avoid exra allocations if possible
+		var arr [maxArgsOnStack]reflect.Value
+		args = arr[:numIn]
+	} else {
+		args = make([]reflect.Value, numIn)
+	}
 
 	err := b.resolve(ctx, cmd, handlerType, args)
 	if err != nil {
@@ -239,15 +247,16 @@ func (b *busImpl) Publish(ctx context.Context, event interface{}) error {
 			defer wg.Done()
 			defer b.runnig.Done()
 
-			var (
-				buf  *[]reflect.Value
-				args []reflect.Value
-			)
-
+			var args []reflect.Value
 			listenerType := reflect.TypeOf(listeners[i])
 			if numIn := listenerType.NumIn(); numIn > 0 {
-				buf, args = b.argPool.get(numIn)
-				defer b.argPool.put(buf)
+				if numIn <= maxArgsOnStack {
+					// avoid exra allocations if possible
+					var arr [maxArgsOnStack]reflect.Value
+					args = arr[:numIn]
+				} else {
+					args = make([]reflect.Value, numIn)
+				}
 
 				err := b.resolve(ctx, event, listenerType, args)
 				if err != nil {
@@ -285,8 +294,15 @@ func (b *busImpl) Exec(ctx context.Context, fn interface{}) error {
 		}
 	}
 
-	buf, args := b.argPool.get(funcType.NumIn())
-	defer b.argPool.put(buf)
+	numIn := funcType.NumIn()
+	var args []reflect.Value
+	if numIn <= maxArgsOnStack {
+		// avoid exra allocations if possible
+		var arr [maxArgsOnStack]reflect.Value
+		args = arr[:numIn]
+	} else {
+		args = make([]reflect.Value, numIn)
+	}
 
 	err := b.resolve(ctx, nil, funcType, args)
 	if err != nil {
@@ -330,15 +346,17 @@ func (b *busImpl) new(ctx context.Context, t reflect.Type) (reflect.Value, error
 		b.instancesMu.RUnlock()
 	}
 
-	var (
-		buf  *[]reflect.Value
-		args []reflect.Value
-	)
+	var args []reflect.Value
 
 	providerType := reflect.TypeOf(provider.fn)
 	if numIn := providerType.NumIn(); numIn > 0 {
-		buf, args = b.argPool.get(numIn)
-		defer b.argPool.put(buf)
+		if numIn <= maxArgsOnStack {
+			// avoid exra allocations if possible
+			var arr [maxArgsOnStack]reflect.Value
+			args = arr[:numIn]
+		} else {
+			args = make([]reflect.Value, numIn)
+		}
 
 		err := b.resolve(ctx, nil, providerType, args)
 		if err != nil {
