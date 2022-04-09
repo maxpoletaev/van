@@ -14,8 +14,17 @@ type HandlerFunc interface{}  // func(ctx context.Context, cmd interface{}, deps
 type ListenerFunc interface{} // func(ctx context.Context, event interface{}, deps ...interface)
 
 type providerOpts struct {
+	sync.RWMutex
+
 	fn        ProviderFunc
+	instance  interface{}
 	singleton bool
+}
+
+func (p *providerOpts) call(args []reflect.Value) (reflect.Value, error) {
+	ret := reflect.ValueOf(p.fn).Call(args)
+	instance, err := ret[0], toError(ret[1])
+	return instance, err
 }
 
 type Van interface {
@@ -52,26 +61,23 @@ type Van interface {
 	// Exec executes the given function inside the dependency injector.
 	Exec(ctx context.Context, fn interface{}) error
 
-	// Wait blocks until all current events are processed. Useful for graceful shutdown. The app should
-	// ensure no new events/commands are published. Otherwise, it may run forever.
+	// Wait blocks until all current events are processed. Useful for graceful shutdown. It is up to
+	// the programmer to ensure that no new events/commands are published. Otherwise, it may run forever.
 	Wait()
 }
 
 type busImpl struct {
-	providers   map[reflect.Type]providerOpts
-	handlers    map[reflect.Type]HandlerFunc
-	listeners   map[reflect.Type][]HandlerFunc
-	instances   map[reflect.Type]interface{}
-	instancesMu sync.RWMutex
-	runnig      sync.WaitGroup
+	providers map[reflect.Type]*providerOpts
+	handlers  map[reflect.Type]HandlerFunc
+	listeners map[reflect.Type][]HandlerFunc
+	runnig    sync.WaitGroup
 }
 
 func New() Van {
 	b := &busImpl{}
-	b.providers = make(map[reflect.Type]providerOpts)
+	b.providers = make(map[reflect.Type]*providerOpts)
 	b.handlers = make(map[reflect.Type]HandlerFunc)
 	b.listeners = make(map[reflect.Type][]HandlerFunc)
-	b.instances = make(map[reflect.Type]interface{})
 	b.runnig = sync.WaitGroup{}
 	return b
 }
@@ -105,7 +111,7 @@ func (b *busImpl) registerProvider(provider ProviderFunc, signleton bool) {
 		}
 	}
 
-	b.providers[retType] = providerOpts{
+	b.providers[retType] = &providerOpts{
 		singleton: signleton,
 		fn:        provider,
 	}
@@ -338,17 +344,18 @@ func (b *busImpl) new(ctx context.Context, t reflect.Type) (reflect.Value, error
 	provider := b.providers[t]
 
 	if provider.singleton {
-		b.instancesMu.RLock()
-		if inst, ok := b.instances[t]; ok {
-			b.instancesMu.RUnlock()
-			return reflect.ValueOf(inst), nil
+		provider.RLock()
+		if provider.instance == nil {
+			provider.RUnlock()
+			return b.newSingleton(ctx, t)
 		}
-		b.instancesMu.RUnlock()
+		provider.RUnlock()
+		return reflect.ValueOf(provider.instance), nil
 	}
 
 	var args []reflect.Value
-
 	providerType := reflect.TypeOf(provider.fn)
+
 	if numIn := providerType.NumIn(); numIn > 0 {
 		if numIn <= maxArgsOnStack {
 			// avoid exra allocations if possible
@@ -364,33 +371,48 @@ func (b *busImpl) new(ctx context.Context, t reflect.Type) (reflect.Value, error
 		}
 	}
 
-	providerValue := reflect.ValueOf(provider.fn)
-	if provider.singleton {
-		return func() (reflect.Value, error) {
-			b.instancesMu.Lock()
-			defer b.instancesMu.Unlock()
-
-			if inst, ok := b.instances[t]; ok {
-				return reflect.ValueOf(inst), nil
-			}
-
-			ret := providerValue.Call(args)
-			instValue, err := ret[0], toError(ret[1])
-			if err != nil {
-				return reflect.ValueOf(nil), fmt.Errorf("failed to resolve dependency %s: %w", t.String(), err)
-			}
-
-			b.instances[t] = instValue.Interface()
-			return instValue, nil
-		}()
-	}
-
-	ret := providerValue.Call(args)
-	if err := toError(ret[1]); err != nil {
+	inst, err := provider.call(args)
+	if err != nil {
 		return reflect.ValueOf(nil), fmt.Errorf("failed to resolve dependency %s: %w", t.String(), err)
 	}
 
-	return ret[0], nil
+	return inst, nil
+}
+
+func (b *busImpl) newSingleton(ctx context.Context, t reflect.Type) (reflect.Value, error) {
+	provider := b.providers[t]
+
+	provider.Lock()
+	defer provider.Unlock()
+	if provider.instance != nil {
+		return reflect.ValueOf(provider.instance), nil
+	}
+
+	var args []reflect.Value
+	providerType := reflect.TypeOf(provider.fn)
+
+	if numIn := providerType.NumIn(); numIn > 0 {
+		if numIn <= maxArgsOnStack {
+			// avoid exra allocations if possible
+			var arr [maxArgsOnStack]reflect.Value
+			args = arr[:numIn]
+		} else {
+			args = make([]reflect.Value, numIn)
+		}
+
+		err := b.resolve(ctx, nil, providerType, args)
+		if err != nil {
+			return reflect.ValueOf(nil), err
+		}
+	}
+
+	inst, err := provider.call(args)
+	if err != nil {
+		return reflect.ValueOf(nil), fmt.Errorf("failed to resolve dependency %s: %w", t.String(), err)
+	}
+
+	provider.instance = inst.Interface()
+	return inst, nil
 }
 
 func (b *busImpl) isValidDependency(t reflect.Type) bool {
@@ -398,83 +420,4 @@ func (b *busImpl) isValidDependency(t reflect.Type) bool {
 		return true
 	}
 	return false
-}
-
-func validateProviderType(t reflect.Type) error {
-	switch {
-	case t.Kind() != reflect.Func:
-		return errInvalidType.fmt("provider must be a function, got %s", t.String())
-	case t.NumOut() != 2:
-		return errInvalidType.fmt("provider must have two return values, got %d", t.NumOut())
-	case t.Out(0).Kind() != reflect.Interface:
-		return errInvalidType.fmt("provider's first return value must be an interface, got %s", t.Out(0).String())
-	case !t.Out(1).Implements(typeError):
-		return errInvalidType.fmt("provider's second return value must be an error, got %s", t.Out(1).String())
-	}
-
-	for i := 0; i < t.NumIn(); i++ {
-		argType := t.In(i)
-		if argType.Kind() != reflect.Interface {
-			return errInvalidType.fmt("provider's argument %d must be an interface, got %s", i, argType.String())
-		}
-	}
-
-	return nil
-}
-
-func validateHandlerType(t reflect.Type) error {
-	switch {
-	case t.Kind() != reflect.Func:
-		return errInvalidType.fmt("handler must be a function, got %s", t.String())
-	case t.NumIn() < 2:
-		return errInvalidType.fmt("handler must have at least 2 arguments, got %s", fmt.Sprint(t.NumIn()))
-	case t.In(0) != typeContext:
-		return errInvalidType.fmt("handler's first argument must be context.Context, got %s", t.In(0).String())
-	case !isStructPtr(t.In(1)):
-		return errInvalidType.fmt("handler's second argument must be a struct pointer, got %s", t.In(1).String())
-	case t.NumOut() != 1:
-		return errInvalidType.fmt("handler must have one return value, got %s", fmt.Sprint(t.NumOut()))
-	case !t.Out(0).Implements(typeError):
-		return errInvalidType.fmt("handler's return type must be error, got %s", t.Out(0).String())
-	}
-
-	for i := 2; i < t.NumIn(); i++ {
-		argType := t.In(i)
-		if argType.Kind() != reflect.Interface {
-			return errInvalidType.fmt("handler's argument %d must be an interface, got %s", i, argType.String())
-		}
-	}
-
-	return nil
-}
-
-func validateListenerType(t reflect.Type) error {
-	switch {
-	case t.Kind() != reflect.Func:
-		return errInvalidType.fmt("handler must be a function, got %s", t.String())
-	case t.NumIn() < 2:
-		return errInvalidType.fmt("handler must have at least 2 arguments, got %s", fmt.Sprint(t.NumIn()))
-	case t.In(0) != typeContext:
-		return errInvalidType.fmt("handler's first argument must be context.Context, got %s", t.In(0).String())
-	case t.In(1).Kind() != reflect.Struct:
-		return errInvalidType.fmt("handler's second argument must be a struct, got %s", t.In(1).String())
-	case t.NumOut() != 0:
-		return errInvalidType.fmt("event handler should not have any return values")
-	}
-
-	for i := 2; i < t.NumIn(); i++ {
-		argType := t.In(i)
-		if argType.Kind() != reflect.Interface {
-			return errInvalidType.fmt("handler's argument %d must be an interface, got %s", i, argType.String())
-		}
-	}
-
-	return nil
-}
-
-func toError(v reflect.Value) error {
-	if v.IsNil() {
-		return nil
-	}
-	return v.Interface().(error)
 }

@@ -84,7 +84,7 @@ func TestProvideSingleton(t *testing.T) {
 	})
 	assert.Len(t, bus.providers, 1)
 
-	var opts providerOpts
+	var opts *providerOpts
 	for k := range bus.providers {
 		opts = bus.providers[k]
 		break
@@ -462,11 +462,12 @@ func TestExec_ProviderContext(t *testing.T) {
 		return &GetIntServiceImpl{}, nil
 	})
 
-	bus.Exec(ctx, func(s GetIntService) error {
+	err := bus.Exec(ctx, func(s GetIntService) error {
 		s.Get()
 		return nil
 	})
 
+	assert.NoError(t, err)
 	assert.Equal(t, 1, providerCalled)
 }
 
@@ -523,10 +524,10 @@ func TestExec_Concurrent(t *testing.T) {
 		return &GetIntServiceImpl{}, nil
 	})
 
+	start := make(chan struct{})
 	errchan := make(chan error)
 	wg := sync.WaitGroup{}
 	wg.Add(5)
-	start := make(chan struct{})
 	for i := 0; i < 5; i++ {
 		go func() {
 			<-start

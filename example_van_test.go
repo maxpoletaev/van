@@ -13,7 +13,12 @@ type SayHelloCommand struct {
 
 func SayHello(ctx context.Context, cmd *SayHelloCommand, bus van.Van) error {
 	fmt.Printf("Hello, %s!\n", cmd.Name)
-	bus.Publish(ctx, HelloBeenSaidEvent{Name: cmd.Name, Timestamp: 1})
+
+	err := bus.Publish(ctx, HelloBeenSaidEvent{Name: cmd.Name, Timestamp: 1})
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -30,8 +35,14 @@ func ExampleVan() {
 	bus := van.New()
 	bus.Handle(SayHelloCommand{}, SayHello)
 	bus.Subscribe(HelloBeenSaidEvent{}, HelloBeenSaid)
-	bus.Invoke(context.Background(), &SayHelloCommand{"Golang"})
-	bus.Wait() // wait for the events to be processed before exit
+
+	err := bus.Invoke(context.Background(), &SayHelloCommand{"Golang"})
+	if err != nil {
+		panic(err)
+	}
+
+	// wait for the events to be processed before exit
+	bus.Wait()
 
 	// Output:
 	// Hello, Golang!
