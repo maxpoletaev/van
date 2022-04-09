@@ -31,7 +31,7 @@ bus.Handle(PrintHelloCommand{}, PrintHello)
 ctx := context.Background()
 cmd := &PrintHelloCommand{Name: "Harry"}
 if err := bus.Invoke(ctx, cmd); err != nil {
-	log.Printf("[ERROR] failed to print hello: %v", err)
+	log.Printf("[ERROR] failed to invoke PrintHelloCommand: %v", err)
 }
 ```
 
@@ -63,7 +63,7 @@ event := OrderCreatedEvent{
 }
 ctx := context.Background()
 if err := bus.Publish(ctx, event); err != nil {
-	log.Printf("[ERROR] failed to publishing an event: %v", err)
+	log.Printf("[ERROR] failed to publish OrderCreatedEvent: %v", err)
 }
 ```
 
@@ -90,7 +90,7 @@ bus.ProvideSingleton(func() (Logger, error) {
 // here we initialize new database connection every time UserRepo is used as a dependency
 func newUserRepoProvider(db *sql.DB) interface{} {
 	return func(ctx context.Context, logger Logger) (UserRepo, error) {
-		conn := db.Conn(ctx) // TODO: make sure context is cancelled
+		conn := db.Conn(ctx) // TODO: make sure the context is cancelled at the end of the request lifespan
 		return newPostgresUserRepo(conn, logger)
 	}
 }
@@ -121,7 +121,7 @@ func HelloWorldPrinted(ctx context.Context, event HelloWorldPrintedEvent, logger
 
 ## Is it slow?
 
-Well, yeah... Although it tries to do most of the checks during the start up, it’s still slow as hell due to reflection magic under the hood used for dynamically-constructed function arguments, the most painful of which is `reflect.Value.Call()`.
+Well... Although it tries to do most of the checks during the start up, it’s still slow as hell due to reflection magic under the hood used for dynamically-constructed function arguments, the most painful of which is `reflect.Value.Call()`.
 
 The following benchmark shows that simple dynamic function calls in Go can be 10 to 1000 times slower than static function calls, and this is even without the dependency-injection overhead involved.
 
@@ -217,7 +217,7 @@ type Logger interface {
     Printf(string)
 }
 
-type ErrorLogger ErrorLogger
+type ErrorLogger Logger
 
 bus.ProvideSingleton(func() (Logger, error) {
 	flags := log.LstdFlags | log.LUTC
@@ -226,6 +226,6 @@ bus.ProvideSingleton(func() (Logger, error) {
 
 bus.ProvideSingleton(func() (ErrorLogger, error) {
 	flags := log.LstdFlags | log.LUTC | log.Llongfile
-	return logging.NewLogger(os.Stderr, "[ERROR] ", flags), nil
+	return log.New(os.Stderr, "[ERROR] ", flags), nil
 })
 ```
