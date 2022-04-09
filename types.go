@@ -16,7 +16,7 @@ func isStructPtr(t reflect.Type) bool {
 	return t.Kind() == reflect.Ptr && t.Elem().Kind() == reflect.Struct
 }
 
-func validateProviderType(t reflect.Type) error {
+func validateProviderSignature(t reflect.Type) error {
 	switch {
 	case t.Kind() != reflect.Func:
 		return errInvalidType.fmt("provider must be a function, got %s", t.String())
@@ -38,7 +38,7 @@ func validateProviderType(t reflect.Type) error {
 	return nil
 }
 
-func validateHandlerType(t reflect.Type) error {
+func validateHandlerSignature(t reflect.Type) error {
 	switch {
 	case t.Kind() != reflect.Func:
 		return errInvalidType.fmt("handler must be a function, got %s", t.String())
@@ -64,7 +64,7 @@ func validateHandlerType(t reflect.Type) error {
 	return nil
 }
 
-func validateListenerType(t reflect.Type) error {
+func validateListenerSignature(t reflect.Type) error {
 	switch {
 	case t.Kind() != reflect.Func:
 		return errInvalidType.fmt("handler must be a function, got %s", t.String())

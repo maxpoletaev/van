@@ -68,16 +68,16 @@ type Van interface {
 
 type busImpl struct {
 	providers map[reflect.Type]*providerOpts
-	handlers  map[reflect.Type]HandlerFunc
 	listeners map[reflect.Type][]HandlerFunc
+	handlers  map[reflect.Type]HandlerFunc
 	runnig    sync.WaitGroup
 }
 
 func New() Van {
 	b := &busImpl{}
 	b.providers = make(map[reflect.Type]*providerOpts)
-	b.handlers = make(map[reflect.Type]HandlerFunc)
 	b.listeners = make(map[reflect.Type][]HandlerFunc)
+	b.handlers = make(map[reflect.Type]HandlerFunc)
 	b.runnig = sync.WaitGroup{}
 	return b
 }
@@ -96,7 +96,7 @@ func (b *busImpl) ProvideSingleton(provider ProviderFunc) {
 
 func (b *busImpl) registerProvider(provider ProviderFunc, signleton bool) {
 	providerType := reflect.TypeOf(provider)
-	if err := validateProviderType(providerType); err != nil {
+	if err := validateProviderSignature(providerType); err != nil {
 		panic(err)
 	}
 
@@ -131,7 +131,7 @@ func (b *busImpl) registerHandler(cmd interface{}, handler HandlerFunc) error {
 	}
 
 	handlerType := reflect.TypeOf(handler)
-	if err := validateHandlerType(handlerType); err != nil {
+	if err := validateHandlerSignature(handlerType); err != nil {
 		return err
 	}
 
@@ -206,7 +206,7 @@ func (b *busImpl) registerListener(event interface{}, listener ListenerFunc) err
 	}
 
 	listenerType := reflect.TypeOf(listener)
-	if err := validateListenerType(listenerType); err != nil {
+	if err := validateListenerSignature(listenerType); err != nil {
 		return err
 	}
 
