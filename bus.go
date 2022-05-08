@@ -24,6 +24,7 @@ type providerOpts struct {
 func (p *providerOpts) call(args []reflect.Value) (reflect.Value, error) {
 	ret := reflect.ValueOf(p.fn).Call(args)
 	instance, err := ret[0], toError(ret[1])
+
 	return instance, err
 }
 
@@ -79,6 +80,7 @@ func New() Van {
 	b.listeners = make(map[reflect.Type][]HandlerFunc)
 	b.handlers = make(map[reflect.Type]HandlerFunc)
 	b.runnig = sync.WaitGroup{}
+
 	return b
 }
 
@@ -101,11 +103,13 @@ func (b *busImpl) registerProvider(provider ProviderFunc, signleton bool) {
 	}
 
 	retType := providerType.Out(0)
+
 	for i := 0; i < providerType.NumIn(); i++ {
 		inType := providerType.In(i)
 		if inType == retType {
 			panic(errInvalidDependency.new("provider function has a dependency of the same type"))
 		}
+
 		if !b.isValidDependency(providerType.In(i)) {
 			panic(errInvalidDependency.fmt("no providers registered for type %s", inType.String()))
 		}
@@ -118,8 +122,7 @@ func (b *busImpl) registerProvider(provider ProviderFunc, signleton bool) {
 }
 
 func (b *busImpl) Handle(cmd interface{}, handler HandlerFunc) {
-	err := b.registerHandler(cmd, handler)
-	if err != nil {
+	if err := b.registerHandler(cmd, handler); err != nil {
 		panic(err)
 	}
 }
@@ -148,6 +151,7 @@ func (b *busImpl) registerHandler(cmd interface{}, handler HandlerFunc) error {
 	}
 
 	b.handlers[cmdType] = handler
+
 	return nil
 }
 
@@ -156,6 +160,7 @@ func (b *busImpl) Invoke(ctx context.Context, cmd interface{}) error {
 	if cmdType.Kind() != reflect.Ptr {
 		return errInvalidType.new("cmd must be a pointer to a struct")
 	}
+
 	cmdType = cmdType.Elem()
 	if cmdType.Kind() != reflect.Struct {
 		return errInvalidType.new("cmd must be a pointer to a struct")
@@ -166,12 +171,12 @@ func (b *busImpl) Invoke(ctx context.Context, cmd interface{}) error {
 		return errInvalidDependency.fmt("no handlers found for type %s", cmdType.String())
 	}
 
+	var args []reflect.Value
+
 	handlerType := reflect.TypeOf(handler)
 	numIn := handlerType.NumIn()
 
-	var args []reflect.Value
 	if numIn <= maxArgsOnStack {
-		// avoid exra allocations if possible
 		var arr [maxArgsOnStack]reflect.Value
 		args = arr[:numIn]
 	} else {
@@ -187,6 +192,7 @@ func (b *busImpl) Invoke(ctx context.Context, cmd interface{}) error {
 	defer b.runnig.Done()
 
 	ret := reflect.ValueOf(handler).Call(args)
+
 	return toError(ret[0])
 }
 
@@ -227,6 +233,7 @@ func (b *busImpl) registerListener(event interface{}, listener ListenerFunc) err
 	}
 
 	b.listeners[eventType] = append(b.listeners[eventType], listener)
+
 	return nil
 }
 
@@ -242,22 +249,23 @@ func (b *busImpl) Publish(ctx context.Context, event interface{}) error {
 	}
 
 	var firstErr error
+
 	firstErrOnce := sync.Once{}
-
 	wg := sync.WaitGroup{}
-	for i := range listeners {
-		wg.Add(1)
-		b.runnig.Add(1)
 
+	b.runnig.Add(len(listeners))
+	wg.Add(len(listeners))
+
+	for i := range listeners {
 		go func(i int) {
 			defer wg.Done()
 			defer b.runnig.Done()
 
 			var args []reflect.Value
+
 			listenerType := reflect.TypeOf(listeners[i])
 			if numIn := listenerType.NumIn(); numIn > 0 {
 				if numIn <= maxArgsOnStack {
-					// avoid exra allocations if possible
 					var arr [maxArgsOnStack]reflect.Value
 					args = arr[:numIn]
 				} else {
@@ -276,34 +284,28 @@ func (b *busImpl) Publish(ctx context.Context, event interface{}) error {
 	}
 
 	wg.Wait()
+
 	return firstErr
 }
 
 func (b *busImpl) Exec(ctx context.Context, fn interface{}) error {
 	funcType := reflect.TypeOf(fn)
-	switch {
-	case funcType.Kind() != reflect.Func:
-		return errInvalidType.fmt("fn should be a function, got %s", funcType.String())
-	case funcType.NumOut() != 1:
-		return errInvalidType.fmt("fn must have one return value, got %s", fmt.Sprint(funcType.NumOut()))
-	case !funcType.Out(0).Implements(typeError):
-		return errInvalidType.fmt("return value must be an error, got %s", funcType.Out(0).String())
+	if err := validateExecLambdaSignature(funcType); err != nil {
+		return err
 	}
 
 	for i := 0; i < funcType.NumIn(); i++ {
 		argType := funcType.In(i)
-		if argType.Kind() != reflect.Interface {
-			return errInvalidType.fmt("function argument %d is not an interface", i)
-		}
 		if !b.isValidDependency(argType) {
 			return errInvalidDependency.fmt("no providers registered for type %s", argType.String())
 		}
 	}
 
-	numIn := funcType.NumIn()
 	var args []reflect.Value
+
+	numIn := funcType.NumIn()
+
 	if numIn <= maxArgsOnStack {
-		// avoid exra allocations if possible
 		var arr [maxArgsOnStack]reflect.Value
 		args = arr[:numIn]
 	} else {
@@ -316,12 +318,14 @@ func (b *busImpl) Exec(ctx context.Context, fn interface{}) error {
 	}
 
 	ret := reflect.ValueOf(fn).Call(args)
+
 	return toError(ret[0])
 }
 
 func (b *busImpl) resolve(ctx context.Context, cmd interface{}, funcType reflect.Type, args []reflect.Value) error {
 	for i := 0; i < funcType.NumIn(); i++ {
 		argType := funcType.In(i)
+
 		switch {
 		case i == 0 && argType == typeContext:
 			args[i] = reflect.ValueOf(ctx)
@@ -334,10 +338,35 @@ func (b *busImpl) resolve(ctx context.Context, cmd interface{}, funcType reflect
 			if err != nil {
 				return err
 			}
+
 			args[i] = instance
+		case argType.Kind() == reflect.Struct:
+			value, err := b.buildStruct(ctx, argType)
+			if err != nil {
+				return err
+			}
+
+			args[i] = value
 		}
 	}
+
 	return nil
+}
+
+func (b *busImpl) buildStruct(ctx context.Context, structType reflect.Type) (reflect.Value, error) {
+	fields := reflect.VisibleFields(structType)
+	value := reflect.New(structType).Elem()
+
+	for _, field := range fields {
+		instance, err := b.new(ctx, field.Type)
+		if err != nil {
+			return reflect.ValueOf(nil), err
+		}
+
+		value.FieldByIndex(field.Index).Set(instance)
+	}
+
+	return value, nil
 }
 
 func (b *busImpl) new(ctx context.Context, t reflect.Type) (reflect.Value, error) {
@@ -345,20 +374,24 @@ func (b *busImpl) new(ctx context.Context, t reflect.Type) (reflect.Value, error
 
 	if provider.singleton {
 		provider.RLock()
+
 		if provider.instance == nil {
 			provider.RUnlock()
+
 			return b.newSingleton(ctx, t)
 		}
+
 		provider.RUnlock()
+
 		return reflect.ValueOf(provider.instance), nil
 	}
 
 	var args []reflect.Value
+
 	providerType := reflect.TypeOf(provider.fn)
 
 	if numIn := providerType.NumIn(); numIn > 0 {
 		if numIn <= maxArgsOnStack {
-			// avoid exra allocations if possible
 			var arr [maxArgsOnStack]reflect.Value
 			args = arr[:numIn]
 		} else {
@@ -384,16 +417,17 @@ func (b *busImpl) newSingleton(ctx context.Context, t reflect.Type) (reflect.Val
 
 	provider.Lock()
 	defer provider.Unlock()
+
 	if provider.instance != nil {
 		return reflect.ValueOf(provider.instance), nil
 	}
 
 	var args []reflect.Value
+
 	providerType := reflect.TypeOf(provider.fn)
 
 	if numIn := providerType.NumIn(); numIn > 0 {
 		if numIn <= maxArgsOnStack {
-			// avoid exra allocations if possible
 			var arr [maxArgsOnStack]reflect.Value
 			args = arr[:numIn]
 		} else {
@@ -412,12 +446,24 @@ func (b *busImpl) newSingleton(ctx context.Context, t reflect.Type) (reflect.Val
 	}
 
 	provider.instance = inst.Interface()
+
 	return inst, nil
 }
 
 func (b *busImpl) isValidDependency(t reflect.Type) bool {
+	if t.Kind() == reflect.Struct {
+		for _, field := range reflect.VisibleFields(t) {
+			if !b.isValidDependency(field.Type) {
+				return false
+			}
+		}
+
+		return true
+	}
+
 	if _, ok := b.providers[t]; ok || t == typeVan || t == typeContext {
 		return true
 	}
+
 	return false
 }

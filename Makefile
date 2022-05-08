@@ -39,7 +39,7 @@ godoc:  ## start godoc server at :8000
 
 .PHONY: lint
 lint:  ## run linter
-	golangci-lint run -E gofmt,unparam,prealloc
+	golangci-lint run --enable gofmt,unparam,prealloc,gosec,nilerr,errcheck,gosimple,wsl
 
 .PHONY: escape
 escape: ## run escape analysis

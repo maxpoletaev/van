@@ -46,7 +46,15 @@ func TestValidateProviderSignature(t *testing.T) {
 		},
 		"argument not interface": {
 			provider: func(context.Context, int) (interface{}, error) { return nil, nil },
-			wantErr:  "provider's argument 1 must be an interface, got int",
+			wantErr:  "argument 1 must be an interface or a struct, got int",
+		},
+		"dependency struct field is not exported": {
+			provider: func(context.Context, struct{ s interface{} }) (interface{}, error) { return nil, nil },
+			wantErr:  "error in dependency struct argument 1: field s must be exported",
+		},
+		"dependency struct field is not an interface": {
+			provider: func(context.Context, struct{ S int }) (interface{}, error) { return nil, nil },
+			wantErr:  "error in dependency struct argument 1: field S must be an interface, got int",
 		},
 	}
 
@@ -92,7 +100,15 @@ func TestValidateHandlerSignature(t *testing.T) {
 		},
 		"third argument is not an interface": {
 			handler: func(context.Context, *struct{}, int) error { return nil },
-			wantErr: "handler's argument 2 must be an interface, got int",
+			wantErr: "argument 2 must be an interface or a struct, got int",
+		},
+		"dependency struct field is not exported": {
+			handler: func(context.Context, *struct{}, struct{ s interface{} }) error { return nil },
+			wantErr: "error in dependency struct argument 2: field s must be exported",
+		},
+		"dependency struct field is not an interface": {
+			handler: func(context.Context, *struct{}, struct{ S int }) error { return nil },
+			wantErr: "error in dependency struct argument 2: field S must be an interface, got int",
 		},
 		"no return values": {
 			handler: func(context.Context, *struct{}, interface{}) {},
@@ -150,7 +166,15 @@ func TestValidateListenerSignature(t *testing.T) {
 		},
 		"third argument is not an interface": {
 			listener: func(context.Context, struct{}, int) {},
-			wantErr:  "handler's argument 2 must be an interface, got int",
+			wantErr:  "argument 2 must be an interface or a struct, got int",
+		},
+		"dependency struct field is not exported": {
+			listener: func(context.Context, struct{}, struct{ s interface{} }) {},
+			wantErr:  "error in dependency struct argument 2: field s must be exported",
+		},
+		"dependency struct field is not an interface": {
+			listener: func(context.Context, struct{}, struct{ S int }) {},
+			wantErr:  "error in dependency struct argument 2: field S must be an interface, got int",
 		},
 		"too many return values": {
 			listener: func(context.Context, struct{}, interface{}) int { return 0 },
@@ -162,6 +186,61 @@ func TestValidateListenerSignature(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			listenerType := reflect.TypeOf(tt.listener)
 			err := validateListenerSignature(listenerType)
+			if tt.wantOk {
+				assert.NoError(t, err)
+			} else {
+				assert.Error(t, err)
+				assert.EqualError(t, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateExecLambdaSignature(t *testing.T) {
+	tests := map[string]struct {
+		fn      interface{}
+		wantErr string
+		wantOk  bool
+	}{
+		"valid": {
+			fn:     func(dep1 interface{}, dep2 struct{ S interface{} }) error { return nil },
+			wantOk: true,
+		},
+		"not a function": {
+			fn:      1,
+			wantErr: "fn should be a function, got int",
+		},
+		"no return values": {
+			fn:      func() {},
+			wantErr: "fn must have one return value, got 0",
+		},
+		"too many return values": {
+			fn:      func() (int, error) { return 0, nil },
+			wantErr: "fn must have one return value, got 2",
+		},
+		"return value is not an error": {
+			fn:      func() int { return 0 },
+			wantErr: "return value must be an error, got int",
+		},
+		"dependency is not an interface": {
+			fn:      func(int) error { return nil },
+			wantErr: "argument 0 must be an interface or a struct, got int",
+		},
+		"dependency struct field is not exported": {
+			fn:      func(struct{ s interface{} }) error { return nil },
+			wantErr: "error in dependency struct argument 0: field s must be exported",
+		},
+		"dependency struct field is not an interface": {
+			fn:      func(struct{ S int }) error { return nil },
+			wantErr: "error in dependency struct argument 0: field S must be an interface, got int",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			fnType := reflect.TypeOf(tt.fn)
+			err := validateExecLambdaSignature(fnType)
+
 			if tt.wantOk {
 				assert.NoError(t, err)
 			} else {

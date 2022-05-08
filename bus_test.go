@@ -41,13 +41,14 @@ func panicToError(fn func()) (err error) {
 		}
 	}()
 	fn()
+
 	return nil
 }
 
 func TestProvide(t *testing.T) {
 	bus := New().(*busImpl)
-
 	setIntService := &SetIntSevriceImpl{}
+
 	bus.Provide(func() (SetIntService, error) {
 		return setIntService, nil
 	})
@@ -129,7 +130,7 @@ func TestProvideFails(t *testing.T) {
 				return &GetIntServiceImpl{}, nil
 			},
 			wantErr:    errInvalidType,
-			wantErrMsg: "provider's argument 0 must be an interface, got int",
+			wantErrMsg: "argument 0 must be an interface or a struct, got int",
 		},
 		"unknown interface": {
 			provider: func(s SetIntService) (GetIntService, error) {
@@ -243,6 +244,7 @@ func TestHandleFails(t *testing.T) {
 			wantErrMsg: "command type mismatch",
 		},
 	}
+
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			bus := New()
@@ -256,15 +258,45 @@ func TestHandleFails(t *testing.T) {
 }
 
 func TestInvoke(t *testing.T) {
-	bus := New()
 	var providerExecuted, handlerExecuted int
+
+	ctx := context.Background()
+	bus := New()
+
 	bus.Provide(func() (SetIntService, error) {
 		providerExecuted++
 		return &SetIntSevriceImpl{}, nil
 	})
 
-	ctx := context.Background()
 	bus.Handle(Command{}, func(c context.Context, cmd *Command, s SetIntService) error {
+		handlerExecuted++
+		return nil
+	})
+
+	for i := 0; i < 5; i++ {
+		err := bus.Invoke(ctx, &Command{})
+		assert.NoError(t, err)
+	}
+
+	assert.Equal(t, 5, providerExecuted)
+	assert.Equal(t, 5, handlerExecuted)
+}
+
+func TestInvoke_StructDeps(t *testing.T) {
+	var providerExecuted, handlerExecuted int
+
+	type dependencySet struct {
+		S SetIntService
+	}
+
+	ctx := context.Background()
+	bus := New()
+
+	bus.Provide(func() (SetIntService, error) {
+		providerExecuted++
+		return &SetIntSevriceImpl{}, nil
+	})
+	bus.Handle(Command{}, func(c context.Context, cmd *Command, deps dependencySet) error {
 		handlerExecuted++
 		return nil
 	})
@@ -302,6 +334,7 @@ func TestInvokeFails(t *testing.T) {
 
 	bus := New()
 	ctx := context.Background()
+
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			err := bus.Invoke(ctx, tt.cmd)
@@ -311,8 +344,9 @@ func TestInvokeFails(t *testing.T) {
 }
 
 func TestInvokeFails_ProviderError(t *testing.T) {
-	bus := New()
 	var providerExecuted, handlerExecuted int
+
+	bus := New()
 	bus.Provide(func() (GetIntService, error) {
 		providerExecuted++
 		return nil, assert.AnError
@@ -370,7 +404,7 @@ func TestSubscribeFails(t *testing.T) {
 		},
 		"dependency is not an interface": {
 			handler:    func(ctx context.Context, event Event, dep int) {},
-			wantErrMsg: "handler's argument 2 must be an interface, got int",
+			wantErrMsg: "argument 2 must be an interface or a struct, got int",
 		},
 		"unknown provider": {
 			handler:    func(ctx context.Context, event Event, dep UnknownService) {},
@@ -381,7 +415,9 @@ func TestSubscribeFails(t *testing.T) {
 			wantErrMsg: "event handler should not have any return values",
 		},
 	}
+
 	bus := New()
+
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			err := panicToError(func() {
@@ -395,6 +431,7 @@ func TestSubscribeFails(t *testing.T) {
 
 func TestPublish_SingleListener(t *testing.T) {
 	var eventTriggered int
+
 	listener := func(ctx context.Context, event Event) {
 		eventTriggered++
 	}
@@ -409,6 +446,7 @@ func TestPublish_SingleListener(t *testing.T) {
 
 func TestPublish_MultipleListeners(t *testing.T) {
 	var listenerACalled, listenerBCalled int
+
 	listenerA := func(ctx context.Context, event Event) {
 		listenerACalled++
 	}
@@ -426,8 +464,9 @@ func TestPublish_MultipleListeners(t *testing.T) {
 }
 
 func TestPublish_ProviderFails(t *testing.T) {
-	bus := New()
 	var providerExecuted, handlerExecuted int
+
+	bus := New()
 	bus.Provide(func() (GetIntService, error) {
 		providerExecuted++
 		return nil, assert.AnError
@@ -435,7 +474,9 @@ func TestPublish_ProviderFails(t *testing.T) {
 	bus.Subscribe(Event{}, func(ctx context.Context, event Event, s GetIntService) {
 		handlerExecuted++
 	})
+
 	err := bus.Publish(context.Background(), Event{})
+
 	assert.ErrorIs(t, err, assert.AnError)
 	assert.Equal(t, 1, providerExecuted)
 	assert.Equal(t, 0, handlerExecuted)
@@ -452,10 +493,11 @@ func TestExec_Bus(t *testing.T) {
 }
 
 func TestExec_ProviderContext(t *testing.T) {
-	bus := New()
+	var providerCalled int
 
 	ctx := context.Background()
-	var providerCalled int
+	bus := New()
+
 	bus.Provide(func(c context.Context) (GetIntService, error) {
 		providerCalled++
 		assert.Equal(t, ctx, c)
@@ -472,9 +514,9 @@ func TestExec_ProviderContext(t *testing.T) {
 }
 
 func TestExec_Transitive(t *testing.T) {
-	bus := New()
-
 	var providerExecuted, handlerExecuted int
+
+	bus := New()
 	bus.Provide(func() (GetIntService, error) {
 		providerExecuted++
 		return &GetIntServiceImpl{}, nil
@@ -494,9 +536,9 @@ func TestExec_Transitive(t *testing.T) {
 }
 
 func TestExec_Singleton(t *testing.T) {
-	bus := New()
-
 	var providerExecuted, handlerExecuted int
+
+	bus := New()
 	bus.ProvideSingleton(func() (GetIntService, error) {
 		providerExecuted++
 		return &GetIntServiceImpl{}, nil
@@ -516,9 +558,9 @@ func TestExec_Singleton(t *testing.T) {
 }
 
 func TestExec_Concurrent(t *testing.T) {
-	bus := New()
-
 	var providerExecuted int
+
+	bus := New()
 	bus.ProvideSingleton(func() (GetIntService, error) {
 		providerExecuted++
 		return &GetIntServiceImpl{}, nil
@@ -526,12 +568,16 @@ func TestExec_Concurrent(t *testing.T) {
 
 	start := make(chan struct{})
 	errchan := make(chan error)
+
 	wg := sync.WaitGroup{}
 	wg.Add(5)
+
 	for i := 0; i < 5; i++ {
 		go func() {
 			<-start
+
 			defer wg.Done()
+
 			err := bus.Exec(context.Background(), func(s GetIntService) error {
 				assert.NotNil(t, s)
 				return nil
@@ -544,6 +590,34 @@ func TestExec_Concurrent(t *testing.T) {
 
 	close(start)
 	wg.Wait()
+
 	assert.Len(t, errchan, 0)
 	assert.Equal(t, 1, providerExecuted)
+}
+
+func TestExec_Fails(t *testing.T) {
+	tests := map[string]struct {
+		fn      interface{}
+		wantErr string
+	}{
+		"unknown provider": {
+			fn:      func(dep UnknownService) error { return nil },
+			wantErr: "no providers registered for type van.UnknownService",
+		},
+		"invalid signature": {
+			fn:      func() {},
+			wantErr: "fn must have one return value, got 0",
+		},
+	}
+
+	ctx := context.Background()
+	bus := New()
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := bus.Exec(ctx, tt.fn)
+			assert.Error(t, err)
+			assert.EqualError(t, err, tt.wantErr)
+		})
+	}
 }

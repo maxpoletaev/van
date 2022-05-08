@@ -25,6 +25,9 @@ func (s *serviceImpl) Run() int { return s.ret }
 
 func BenchmarkInvoke_Transitive(b *testing.B) {
 	bus := New()
+	ctx := context.Background()
+	cmd := &benchCommand{val: 1}
+
 	bus.Provide(func() (serviceA, error) {
 		return &serviceImpl{ret: 1}, nil
 	})
@@ -44,11 +47,10 @@ func BenchmarkInvoke_Transitive(b *testing.B) {
 		return nil
 	})
 
-	ctx := context.Background()
-	cmd := &benchCommand{val: 1}
 	var err error
 
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		err = bus.Invoke(ctx, cmd)
 		if err != nil {
@@ -58,7 +60,9 @@ func BenchmarkInvoke_Transitive(b *testing.B) {
 }
 
 func BenchmarkInvoke_Singletons(b *testing.B) {
+	ctx := context.Background()
 	bus := New()
+
 	bus.ProvideSingleton(func() (serviceA, error) {
 		return &serviceImpl{ret: 1}, nil
 	})
@@ -78,10 +82,10 @@ func BenchmarkInvoke_Singletons(b *testing.B) {
 		return nil
 	})
 
-	ctx := context.Background()
 	var err error
 
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		err = bus.Invoke(ctx, &benchCommand{val: i})
 		if err != nil {
@@ -91,7 +95,9 @@ func BenchmarkInvoke_Singletons(b *testing.B) {
 }
 
 func BenchmarkInvoke_SingleProvider(b *testing.B) {
+	ctx := context.Background()
 	bus := New()
+
 	bus.Provide(func() (serviceA, error) {
 		return &serviceImpl{ret: 1}, nil
 	})
@@ -99,8 +105,8 @@ func BenchmarkInvoke_SingleProvider(b *testing.B) {
 		return nil
 	})
 
-	ctx := context.Background()
 	var err error
+
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -118,6 +124,7 @@ func BenchmarkExec_SingleProvider(b *testing.B) {
 	})
 
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		err := bus.Exec(context.Background(), func(a serviceA) error {
 			return nil
@@ -130,9 +137,9 @@ func BenchmarkExec_SingleProvider(b *testing.B) {
 
 func BenchmarkExec_Bus(b *testing.B) {
 	bus := New()
+
 	var err error
 
-	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		err = bus.Exec(context.Background(), func(b Van) error {
 			return nil
@@ -171,6 +178,7 @@ func BenchmarkFuncCallReflection(b *testing.B) {
 	divfn := reflect.ValueOf(div)
 
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		divfn.Call(args)
 	}
