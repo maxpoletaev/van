@@ -225,7 +225,7 @@ BenchmarkInvoke_Singletons-12        	  618997	      1766 ns/op	     176 B/op	  
 ```
 
 The overall picture is not extremely bad. Given the fact that we are still in
-the nanoseconds (10<sub>−9<sub> seconds) scale, is unlikely to introduce any
+the nanoseconds (10<sup>−9</sup> seconds) scale, is unlikely to introduce any
 visible delay in 95% of the cases. Most probably, your application will spend way
 more time doing actual business logic, database round trips and JSON serialization.
 
