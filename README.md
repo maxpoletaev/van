@@ -159,6 +159,8 @@ func HelloWorldPrinted(ctx context.Context, event HelloWorldPrintedEvent, deps D
 
 ## Is it fast?
 
+*All benhmakrs code is available in the [bus_bench_test.go](bus_bench_test.go) file.*
+
 Although it tries to do most of the heavy lifting during the start-up, it’s still
 considered to be slow compared to "native" code due to reflection magic under
 the hood used for dynamically-constructed function arguments.
@@ -172,64 +174,34 @@ goos: darwin
 goarch: amd64
 pkg: github.com/maxpoletaev/van
 cpu: Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz
-BenchmarkFuncCallNative-12        	1000000000	         0.2464 ns/op	       0 B/op	       0 allocs/op
-BenchmarkFuncCallNativeHeap-12    	  53380869	          20.92 ns/op	      16 B/op	       1 allocs/op
-BenchmarkFuncCallReflection-12    	   4695636	          250.9 ns/op	      32 B/op	       2 allocs/op
+BenchmarkFuncCall_StaticStack-12           	1000000000	         0.2446 ns/op	   0 B/op	       0 allocs/op
+BenchmarkFuncCall_StaticHeap-12            	54928545	        20.68 ns/op	      16 B/op	       1 allocs/op
+BenchmarkFuncCall_Reflection-12            	 4555992	       248.2 ns/op	      32 B/op	       2 allocs/op
 ```
 
-<details>
-<summary>Benchmark code</summary>
-
-```go
-func div(a, b float64) float64 {
-	return a / b
-}
-
-func BenchmarkFuncCallNative(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		div(float64(987654.321), float64(123456.789))
-	}
-}
-
-func BenchmarkFuncCallNativeHeap(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		// make a heap allocation in each iteration to simulate
-		// the behaviour similar to the reflection call
-		args := make([]float64, 0)
-		args = append(args, float64(987654.321), float64(123456.789))
-		div(args[0], args[1])
-	}
-}
-
-func BenchmarkFuncCallReflection(b *testing.B) {
-	args := []reflect.Value{
-		reflect.ValueOf(float64(987654.321)),
-		reflect.ValueOf(float64(123456.789)),
-	}
-	divfn := reflect.ValueOf(div)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		divfn.Call(args)
-	}
-}
-```
-</details>
-
-A general optimization would be to use singleons whenever possible to reduce the
-number of reflection calls to the providers:
+If we compare relativeley large dependency graph constructed statically with
+the one constructed dynamically using dependency injection, the difference will
+be at about 40 to 50 times:
 
 ```
-BenchmarkInvoke_Transitive-12        	   80292	     13556 ns/op	    2816 B/op	     128 allocs/op
-BenchmarkInvoke_Singletons-12        	  618997	      1766 ns/op	     176 B/op	      10 allocs/op
+BenchmarkBus_LargeGraphTransitive-12    	   82728	     12986 ns/op	    2816 B/op	     128 allocs/op
+BenchmarkNoBus_LargeGraph-12               	 3522093	       336.5 ns/op	     224 B/op	      28 allocs/op
 ```
 
-The overall picture is not extremely bad. Given the fact that we are still in
-the nanoseconds (10<sup>−9</sup> seconds) scale, is unlikely to introduce any
-visible delay in 95% of the cases. Most probably, your application will spend way
-more time doing actual business logic, database round trips and JSON serialization.
+A general recommendation is not to forget using singleons whenever possible
+to reduce the number of dynamic reflection calls to the providers:
 
-So, the contribution of the bus to the response time of a typical go service is
+```
+BenchmarkBus_LargeGraphTransitive-12    	   82728	     12986 ns/op	    2816 B/op	     128 allocs/op
+BenchmarkBus_LargeGraphSingletons-12    	  756583	      1590 ns/op	     176 B/op	      10 allocs/op
+```
+
+Given the fact that we are still in the nanoseconds (10<sup>−9</sup> seconds)
+scale, is unlikely to introduce any visible delay in 95% of the cases. Most
+probably, your application will spend way more time doing actual business logic,
+database round trips and JSON serialization.
+
+So, the impact of the bus on the response time of a typical go service is
 estimated at around 1% at worst.
 
 ## Is it safe?

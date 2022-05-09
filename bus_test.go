@@ -78,22 +78,6 @@ func TestProvide_WithContext(t *testing.T) {
 	assert.Len(t, bus.providers, 1)
 }
 
-func TestProvideSingleton(t *testing.T) {
-	bus := New().(*busImpl)
-	bus.ProvideSingleton(func() (GetIntService, error) {
-		return &GetIntServiceImpl{}, nil
-	})
-	assert.Len(t, bus.providers, 1)
-
-	var opts *providerOpts
-	for k := range bus.providers {
-		opts = bus.providers[k]
-		break
-	}
-
-	assert.True(t, opts.singleton)
-}
-
 func TestProvideFails(t *testing.T) {
 	tests := map[string]struct {
 		provider   interface{}
@@ -156,6 +140,85 @@ func TestProvideFails(t *testing.T) {
 			})
 			assert.ErrorIs(t, err, tt.wantErr)
 			assert.Equal(t, tt.wantErrMsg, err.Error())
+		})
+	}
+}
+
+func TestProvideSingleton(t *testing.T) {
+	bus := New().(*busImpl)
+	bus.ProvideSingleton(func() (GetIntService, error) {
+		return &GetIntServiceImpl{}, nil
+	})
+	assert.Len(t, bus.providers, 1)
+
+	var opts *providerOpts
+	for k := range bus.providers {
+		opts = bus.providers[k]
+		break
+	}
+
+	assert.True(t, opts.singleton)
+}
+
+func TestProvideSingletonFails(t *testing.T) {
+	tests := map[string]struct {
+		provider interface{}
+		wantErr  string
+	}{
+		"not a func": {
+			provider: 1,
+			wantErr:  "provider must be a function, got int",
+		},
+		"no return value": {
+			provider: func() {},
+			wantErr:  "provider must have two return values, got 0",
+		},
+		"too many return values": {
+			provider: func() (int, int, int) { return 1, 2, 3 },
+			wantErr:  "provider must have two return values, got 3",
+		},
+		"first return value not an interface": {
+			provider: func() (int, error) { return 1, nil },
+			wantErr:  "provider's first return value must be an interface, got int",
+		},
+		"second return value not an error": {
+			provider: func() (GetIntService, int) { return nil, 1 },
+			wantErr:  "provider's second return value must be an error, got int",
+		},
+		"arg is not an interface": {
+			provider: func(int) (GetIntService, error) {
+				return &GetIntServiceImpl{}, nil
+			},
+			wantErr: "argument 0 must be an interface or a struct, got int",
+		},
+		"unknown interface": {
+			provider: func(s SetIntService) (GetIntService, error) {
+				return &GetIntServiceImpl{}, nil
+			},
+			wantErr: "no providers registered for type van.SetIntService",
+		},
+		"dependency of the same type": {
+			provider: func(s SetIntService) (SetIntService, error) {
+				return s, nil
+			},
+			wantErr: "provider function has a dependency of the same type",
+		},
+		"context as a dependency": {
+			provider: func(ctx context.Context) (SetIntService, error) {
+				return &SetIntSevriceImpl{}, nil
+			},
+			wantErr: "singleton providers cannot use Context as a dependency",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			bus := New()
+			err := panicToError(func() {
+				bus.ProvideSingleton(tt.provider)
+			})
+			assert.Error(t, err)
+			assert.Equal(t, tt.wantErr, err.Error())
 		})
 	}
 }

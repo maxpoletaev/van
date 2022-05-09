@@ -7,6 +7,10 @@ import (
 	"sync"
 )
 
+// Maximum number of arguments to be allocated on the stack.
+// Lower values will use the heap more aggressively which will slow down the program.
+// Higher values will speed up the execution for functions with a large number of
+// dependencies but may increase memory consumption as well.
 const maxArgsOnStack = 16
 
 type ProviderFunc interface{} // func(ctx context.Context, deps ...interface{}) (interface{}, error)
@@ -89,29 +93,38 @@ func (b *busImpl) Wait() {
 }
 
 func (b *busImpl) Provide(provider ProviderFunc) {
-	b.registerProvider(provider, false)
+	if err := b.registerProvider(provider, false); err != nil {
+		panic(err)
+	}
 }
 
 func (b *busImpl) ProvideSingleton(provider ProviderFunc) {
-	b.registerProvider(provider, true)
+	if err := b.registerProvider(provider, true); err != nil {
+		panic(err)
+	}
 }
 
-func (b *busImpl) registerProvider(provider ProviderFunc, signleton bool) {
+func (b *busImpl) registerProvider(provider ProviderFunc, signleton bool) error {
 	providerType := reflect.TypeOf(provider)
 	if err := validateProviderSignature(providerType); err != nil {
-		panic(err)
+		return err
 	}
 
 	retType := providerType.Out(0)
 
 	for i := 0; i < providerType.NumIn(); i++ {
 		inType := providerType.In(i)
+
 		if inType == retType {
-			panic(errInvalidDependency.new("provider function has a dependency of the same type"))
+			return errInvalidDependency.new("provider function has a dependency of the same type")
 		}
 
-		if !b.isValidDependency(providerType.In(i)) {
-			panic(errInvalidDependency.fmt("no providers registered for type %s", inType.String()))
+		if signleton && inType == typeContext {
+			return errInvalidDependency.new("singleton providers cannot use Context as a dependency")
+		}
+
+		if err := b.isValidDependency(inType); err != nil {
+			return err
 		}
 	}
 
@@ -119,6 +132,8 @@ func (b *busImpl) registerProvider(provider ProviderFunc, signleton bool) {
 		singleton: signleton,
 		fn:        provider,
 	}
+
+	return nil
 }
 
 func (b *busImpl) Handle(cmd interface{}, handler HandlerFunc) {
@@ -144,9 +159,8 @@ func (b *busImpl) registerHandler(cmd interface{}, handler HandlerFunc) error {
 
 	// start from the third argument as the first two are always `ctx` and `cmd`
 	for i := 2; i < handlerType.NumIn(); i++ {
-		inType := handlerType.In(i)
-		if !b.isValidDependency(handlerType.In(i)) {
-			panic(errInvalidDependency.fmt("no providers registered for type %s", inType.String()))
+		if err := b.isValidDependency(handlerType.In(i)); err != nil {
+			return err
 		}
 	}
 
@@ -222,9 +236,8 @@ func (b *busImpl) registerListener(event interface{}, listener ListenerFunc) err
 
 	// start from the third argument as the first two are always `ctx` and `event`
 	for i := 2; i < listenerType.NumIn(); i++ {
-		inType := listenerType.In(i)
-		if !b.isValidDependency(listenerType.In(i)) {
-			panic(errInvalidDependency.fmt("no providers registered for type %s", inType.String()))
+		if err := b.isValidDependency(listenerType.In(i)); err != nil {
+			return err
 		}
 	}
 
@@ -295,9 +308,8 @@ func (b *busImpl) Exec(ctx context.Context, fn interface{}) error {
 	}
 
 	for i := 0; i < funcType.NumIn(); i++ {
-		argType := funcType.In(i)
-		if !b.isValidDependency(argType) {
-			return errInvalidDependency.fmt("no providers registered for type %s", argType.String())
+		if err := b.isValidDependency(funcType.In(i)); err != nil {
+			return err
 		}
 	}
 
@@ -450,20 +462,20 @@ func (b *busImpl) newSingleton(ctx context.Context, t reflect.Type) (reflect.Val
 	return inst, nil
 }
 
-func (b *busImpl) isValidDependency(t reflect.Type) bool {
+func (b *busImpl) isValidDependency(t reflect.Type) error {
 	if t.Kind() == reflect.Struct {
 		for _, field := range reflect.VisibleFields(t) {
-			if !b.isValidDependency(field.Type) {
-				return false
+			if err := b.isValidDependency(field.Type); err != nil {
+				return err
 			}
 		}
 
-		return true
+		return nil
 	}
 
 	if _, ok := b.providers[t]; ok || t == typeVan || t == typeContext {
-		return true
+		return nil
 	}
 
-	return false
+	return errInvalidDependency.fmt("no providers registered for type %s", t.String())
 }
