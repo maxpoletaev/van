@@ -20,9 +20,10 @@ type ListenerFunc interface{} // func(ctx context.Context, event interface{}, de
 type providerOpts struct {
 	sync.RWMutex
 
-	fn        ProviderFunc
-	instance  interface{}
-	singleton bool
+	fn           ProviderFunc
+	instance     interface{}
+	singleton    bool
+	takesContext bool
 }
 
 func (p *providerOpts) call(args []reflect.Value) (reflect.Value, error) {
@@ -111,6 +112,7 @@ func (b *busImpl) registerProvider(provider ProviderFunc, signleton bool) error 
 	}
 
 	retType := providerType.Out(0)
+	takesContext := false
 
 	for i := 0; i < providerType.NumIn(); i++ {
 		inType := providerType.In(i)
@@ -119,18 +121,31 @@ func (b *busImpl) registerProvider(provider ProviderFunc, signleton bool) error 
 			return errInvalidDependency.new("provider function has a dependency of the same type")
 		}
 
-		if signleton && inType == typeContext {
-			return errInvalidDependency.new("singleton providers cannot use Context as a dependency")
+		if err := b.validateDependency(inType); err != nil {
+			return err
 		}
 
-		if err := b.isValidDependency(inType); err != nil {
-			return err
+		if inType == typeContext {
+			takesContext = true
+
+			if signleton {
+				return errInvalidDependency.new("singleton providers cannot use Context as a dependency")
+			}
+		}
+
+		if pp, ok := b.providers[inType]; ok && pp.takesContext {
+			takesContext = true
+
+			if signleton {
+				return errInvalidDependency.new("singleton providers cannot depend on providers that take Context")
+			}
 		}
 	}
 
 	b.providers[retType] = &providerOpts{
-		singleton: signleton,
-		fn:        provider,
+		fn:           provider,
+		singleton:    signleton,
+		takesContext: takesContext,
 	}
 
 	return nil
@@ -159,7 +174,7 @@ func (b *busImpl) registerHandler(cmd interface{}, handler HandlerFunc) error {
 
 	// start from the third argument as the first two are always `ctx` and `cmd`
 	for i := 2; i < handlerType.NumIn(); i++ {
-		if err := b.isValidDependency(handlerType.In(i)); err != nil {
+		if err := b.validateDependency(handlerType.In(i)); err != nil {
 			return err
 		}
 	}
@@ -236,7 +251,7 @@ func (b *busImpl) registerListener(event interface{}, listener ListenerFunc) err
 
 	// start from the third argument as the first two are always `ctx` and `event`
 	for i := 2; i < listenerType.NumIn(); i++ {
-		if err := b.isValidDependency(listenerType.In(i)); err != nil {
+		if err := b.validateDependency(listenerType.In(i)); err != nil {
 			return err
 		}
 	}
@@ -308,7 +323,7 @@ func (b *busImpl) Exec(ctx context.Context, fn interface{}) error {
 	}
 
 	for i := 0; i < funcType.NumIn(); i++ {
-		if err := b.isValidDependency(funcType.In(i)); err != nil {
+		if err := b.validateDependency(funcType.In(i)); err != nil {
 			return err
 		}
 	}
@@ -462,10 +477,10 @@ func (b *busImpl) newSingleton(ctx context.Context, t reflect.Type) (reflect.Val
 	return inst, nil
 }
 
-func (b *busImpl) isValidDependency(t reflect.Type) error {
+func (b *busImpl) validateDependency(t reflect.Type) error {
 	if t.Kind() == reflect.Struct {
 		for _, field := range reflect.VisibleFields(t) {
-			if err := b.isValidDependency(field.Type); err != nil {
+			if err := b.validateDependency(field.Type); err != nil {
 				return err
 			}
 		}
