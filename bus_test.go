@@ -199,15 +199,13 @@ func TestProvideSingletonFails(t *testing.T) {
 	}
 }
 
-func TestProvideSingletonFails_ParentProviderRequiresContext(t *testing.T) {
+func TestProvideSingletonFails_ParentProviderTakesContext(t *testing.T) {
 	bus := New()
-
-	bus.Provide(func(ctx context.Context) (serviceA, error) {
-		return &serviceImpl{}, nil
-	})
+	bus.Provide(func(ctx context.Context) (serviceA, error) { return &serviceImpl{}, nil })
+	bus.Provide(func(a serviceA) (serviceB, error) { return &serviceImpl{}, nil })
 
 	assert.PanicsWithError(t, "singleton providers cannot depend on providers that take Context", func() {
-		bus.ProvideSingleton(func(a serviceA) (serviceB, error) {
+		bus.ProvideSingleton(func(b serviceB) (serviceC, error) {
 			return &serviceImpl{}, nil
 		})
 	})
@@ -336,6 +334,7 @@ func TestInvoke_StructDeps(t *testing.T) {
 		providerExecuted++
 		return &SetIntSevriceImpl{}, nil
 	})
+
 	bus.Handle(Command{}, func(c context.Context, cmd *Command, deps dependencySet) error {
 		handlerExecuted++
 		return nil
@@ -348,6 +347,88 @@ func TestInvoke_StructDeps(t *testing.T) {
 
 	assert.Equal(t, 5, providerExecuted)
 	assert.Equal(t, 5, handlerExecuted)
+}
+
+func TestInvoke_Concurrent(t *testing.T) {
+	providerExecuted := make(chan bool, 5)
+	handlerExecuted := make(chan bool, 5)
+
+	bus := New()
+	bus.Provide(func() (serviceA, error) {
+		providerExecuted <- true
+		return &serviceImpl{}, nil
+	})
+	bus.Handle(Command{}, func(c context.Context, cmd *Command, a serviceA) error {
+		handlerExecuted <- true
+		return nil
+	})
+
+	start := make(chan struct{})
+	errchan := make(chan error)
+
+	wg := sync.WaitGroup{}
+	wg.Add(5)
+
+	for i := 0; i < 5; i++ {
+		go func() {
+			<-start
+
+			defer wg.Done()
+
+			err := bus.Invoke(context.Background(), &Command{})
+			if err != nil {
+				errchan <- err
+			}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+
+	assert.Len(t, errchan, 0)
+	assert.Len(t, providerExecuted, 5)
+	assert.Len(t, handlerExecuted, 5)
+}
+
+func TestInvoke_SingletonConcurrent(t *testing.T) {
+	providerExecuted := make(chan bool, 5)
+	handlerExecuted := make(chan bool, 5)
+
+	bus := New()
+	bus.ProvideSingleton(func() (serviceA, error) {
+		providerExecuted <- true
+		return &serviceImpl{}, nil
+	})
+	bus.Handle(Command{}, func(c context.Context, cmd *Command, a serviceA) error {
+		handlerExecuted <- true
+		return nil
+	})
+
+	start := make(chan struct{})
+	errchan := make(chan error)
+
+	wg := sync.WaitGroup{}
+	wg.Add(5)
+
+	for i := 0; i < 5; i++ {
+		go func() {
+			<-start
+
+			defer wg.Done()
+
+			err := bus.Invoke(context.Background(), &Command{})
+			if err != nil {
+				errchan <- err
+			}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+
+	assert.Len(t, errchan, 0)
+	assert.Len(t, providerExecuted, 1)
+	assert.Len(t, handlerExecuted, 5)
 }
 
 func TestInvokeFails(t *testing.T) {
