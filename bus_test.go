@@ -559,6 +559,8 @@ func TestPublish_SingleListener(t *testing.T) {
 	bus.Subscribe(Event{}, listener)
 	err := bus.Publish(context.Background(), Event{})
 
+	bus.Wait()
+
 	require.NoError(t, err)
 	assert.Equal(t, 1, eventTriggered)
 }
@@ -577,28 +579,11 @@ func TestPublish_MultipleListeners(t *testing.T) {
 	bus.Subscribe(Event{}, listenerA, listenerB)
 	err := bus.Publish(context.Background(), Event{})
 
+	bus.Wait()
+
 	require.NoError(t, err)
 	assert.Equal(t, 1, listenerACalled)
 	assert.Equal(t, 1, listenerBCalled)
-}
-
-func TestPublish_ProviderFails(t *testing.T) {
-	var providerExecuted, handlerExecuted int
-
-	bus := New()
-	bus.Provide(func() (GetIntService, error) {
-		providerExecuted++
-		return nil, assert.AnError
-	})
-	bus.Subscribe(Event{}, func(ctx context.Context, event Event, s GetIntService) {
-		handlerExecuted++
-	})
-
-	err := bus.Publish(context.Background(), Event{})
-
-	assert.ErrorIs(t, err, assert.AnError)
-	assert.Equal(t, 1, providerExecuted)
-	assert.Equal(t, 0, handlerExecuted)
 }
 
 func TestExec_Bus(t *testing.T) {

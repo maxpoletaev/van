@@ -20,6 +20,9 @@ type serviceImpl struct {
 type benchCommand struct {
 	val int
 }
+type benchEvent struct {
+	val int
+}
 
 func (s *serviceImpl) Run() int { return s.ret }
 
@@ -209,6 +212,71 @@ func BenchmarkInvoke_SingleDependency(b *testing.B) {
 	}
 }
 
+func BenchmarkPublish_LageGraphTransitive(b *testing.B) {
+	bus := New()
+
+	bus.Provide(func() (serviceA, error) {
+		return &serviceImpl{ret: 1}, nil
+	})
+	bus.Provide(func(a serviceA) (serviceB, error) {
+		a.Run()
+		return &serviceImpl{ret: 2}, nil
+	})
+	bus.Provide(func(a serviceA, b serviceB) (serviceC, error) {
+		a.Run()
+		b.Run()
+		return &serviceImpl{ret: 3}, nil
+	})
+	bus.Provide(func(a serviceA, b serviceB, c serviceC) (serviceD, error) {
+		a.Run()
+		b.Run()
+		c.Run()
+		return &serviceImpl{ret: 4}, nil
+	})
+	bus.Provide(func(a serviceA, b serviceB, c serviceC, d serviceD) (serviceE, error) {
+		a.Run()
+		b.Run()
+		c.Run()
+		d.Run()
+		return &serviceImpl{ret: 5}, nil
+	})
+
+	bus.Subscribe(
+		benchEvent{},
+		func(
+			ctx context.Context,
+			event benchEvent,
+			a serviceA,
+			b serviceB,
+			c serviceC,
+			d serviceD,
+			e serviceE,
+		) {
+			a.Run()
+			b.Run()
+			c.Run()
+			d.Run()
+			e.Run()
+		},
+	)
+
+	var err error
+
+	b.ResetTimer()
+
+	ctx := context.Background()
+	event := benchEvent{val: 1}
+
+	for i := 0; i < b.N; i++ {
+		err = bus.Publish(ctx, event)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		bus.Wait()
+	}
+}
+
 func BenchmarkExec_SingleDependency(b *testing.B) {
 	bus := New()
 	bus.Provide(func() (serviceA, error) {
@@ -258,12 +326,14 @@ func BenchmarkNoBus_LargeGraph(b *testing.B) {
 	createServiceC := func() serviceC {
 		createServiceA().Run()
 		createServiceB().Run()
+
 		return &serviceImpl{ret: 3}
 	}
 	createServiceD := func() serviceD {
 		createServiceA().Run()
 		createServiceB().Run()
 		createServiceC().Run()
+
 		return &serviceImpl{ret: 3}
 	}
 	createServiceE := func() serviceE {
@@ -271,6 +341,7 @@ func BenchmarkNoBus_LargeGraph(b *testing.B) {
 		createServiceB().Run()
 		createServiceC().Run()
 		createServiceD().Run()
+
 		return &serviceImpl{ret: 4}
 	}
 
@@ -293,13 +364,16 @@ func BenchmarkNoBus_SignleDependency(b *testing.B) {
 		return nil
 	}
 
-	var err error
-	var srv serviceA
+	var (
+		err error
+		srv serviceA
+	)
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
 		srv = createService()
+
 		err = handle(srv)
 		if err != nil {
 			b.Fatal(err)

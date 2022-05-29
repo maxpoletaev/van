@@ -271,49 +271,52 @@ func (b *busImpl) Publish(ctx context.Context, event interface{}) error {
 		return errInvalidType.fmt("event must be a a struct, got %s", eventType.Name())
 	}
 
+	_, ok := b.listeners[eventType]
+	if !ok {
+		return nil
+	}
+
+	b.runnig.Add(1)
+
+	go func() {
+		defer b.runnig.Done()
+		_ = b.processEvent(ctx, event)
+	}()
+
+	return nil
+}
+
+func (b *busImpl) processEvent(ctx context.Context, event interface{}) error {
+	eventType := reflect.TypeOf(event)
+
 	listeners, ok := b.listeners[eventType]
 	if !ok {
 		return nil
 	}
 
-	var firstErr error
-
-	firstErrOnce := sync.Once{}
-	wg := sync.WaitGroup{}
-
-	b.runnig.Add(len(listeners))
-	wg.Add(len(listeners))
+	var args []reflect.Value
 
 	for i := range listeners {
-		go func(i int) {
-			defer wg.Done()
-			defer b.runnig.Done()
+		listenerType := reflect.TypeOf(listeners[i])
 
-			var args []reflect.Value
-
-			listenerType := reflect.TypeOf(listeners[i])
-			if numIn := listenerType.NumIn(); numIn > 0 {
-				if numIn <= maxArgsOnStack {
-					var arr [maxArgsOnStack]reflect.Value
-					args = arr[:numIn]
-				} else {
-					args = make([]reflect.Value, numIn)
-				}
-
-				err := b.resolve(ctx, event, listenerType, args)
-				if err != nil {
-					firstErrOnce.Do(func() { firstErr = err })
-					return
-				}
+		if numIn := listenerType.NumIn(); numIn > 0 {
+			if numIn <= maxArgsOnStack {
+				var arr [maxArgsOnStack]reflect.Value
+				args = arr[:numIn]
+			} else {
+				args = make([]reflect.Value, numIn)
 			}
 
-			reflect.ValueOf(listeners[i]).Call(args)
-		}(i)
+			err := b.resolve(ctx, event, listenerType, args)
+			if err != nil {
+				return err
+			}
+		}
+
+		reflect.ValueOf(listeners[i]).Call(args)
 	}
 
-	wg.Wait()
-
-	return firstErr
+	return nil
 }
 
 func (b *busImpl) Exec(ctx context.Context, fn interface{}) error {
@@ -374,6 +377,7 @@ func (b *busImpl) resolve(ctx context.Context, cmd interface{}, funcType reflect
 			}
 
 			args[i] = value
+		default:
 		}
 	}
 
