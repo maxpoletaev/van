@@ -35,14 +35,14 @@ func (s *SetIntSevriceImpl) Set(i int) {}
 type UnknownService interface{}
 
 func TestProvide(t *testing.T) {
-	bus := New().(*busImpl)
+	bus := New()
 	setIntService := &SetIntSevriceImpl{}
 
 	bus.Provide(func() (SetIntService, error) {
 		return setIntService, nil
 	})
 
-	bus.Provide(func(b Van, s SetIntService) (GetIntService, error) {
+	bus.Provide(func(b *Van, s SetIntService) (GetIntService, error) {
 		assert.Equal(t, bus, b)
 		assert.Equal(t, setIntService, s)
 		return &GetIntServiceImpl{}, nil
@@ -52,7 +52,7 @@ func TestProvide(t *testing.T) {
 }
 
 func TestProvide_NoDeps(t *testing.T) {
-	bus := New().(*busImpl)
+	bus := New()
 	bus.Provide(func() (GetIntService, error) {
 		return &GetIntServiceImpl{}, nil
 	})
@@ -60,7 +60,7 @@ func TestProvide_NoDeps(t *testing.T) {
 }
 
 func TestProvide_WithContext(t *testing.T) {
-	bus := New().(*busImpl)
+	bus := New()
 	bus.Provide(func(ctx context.Context) (GetIntService, error) {
 		return &GetIntServiceImpl{}, nil
 	})
@@ -96,7 +96,7 @@ func TestProvideFails(t *testing.T) {
 			provider: func(int) (GetIntService, error) {
 				return &GetIntServiceImpl{}, nil
 			},
-			wantErr: "argument 0 must be an interface or a struct, got int",
+			wantErr: "argument 0 must be an interface, struct or *van.Van, got int",
 		},
 		"unknown interface": {
 			provider: func(s SetIntService) (GetIntService, error) {
@@ -123,7 +123,7 @@ func TestProvideFails(t *testing.T) {
 }
 
 func TestProvideSingleton(t *testing.T) {
-	bus := New().(*busImpl)
+	bus := New()
 	bus.ProvideSingleton(func() (GetIntService, error) {
 		return &GetIntServiceImpl{}, nil
 	})
@@ -167,7 +167,7 @@ func TestProvideSingletonFails(t *testing.T) {
 			provider: func(int) (GetIntService, error) {
 				return &GetIntServiceImpl{}, nil
 			},
-			wantErr: "argument 0 must be an interface or a struct, got int",
+			wantErr: "argument 0 must be an interface, struct or *van.Van, got int",
 		},
 		"unknown interface": {
 			provider: func(s SetIntService) (GetIntService, error) {
@@ -212,8 +212,8 @@ func TestProvideSingletonFails_ParentProviderTakesContext(t *testing.T) {
 }
 
 func TestHandle(t *testing.T) {
-	bus := New().(*busImpl)
-	bus.Handle(Command{}, func(ctx context.Context, cmd *Command, bus Van) error {
+	bus := New()
+	bus.Handle(Command{}, func(ctx context.Context, cmd *Command, bus *Van) error {
 		return nil
 	})
 	assert.Len(t, bus.handlers, 1)
@@ -494,8 +494,8 @@ func TestInvokeFails_HandlerError(t *testing.T) {
 }
 
 func TestHandleEvent(t *testing.T) {
-	bus := New().(*busImpl)
-	handler := func(ctx context.Context, event Event, b Van) {
+	bus := New()
+	handler := func(ctx context.Context, event Event, b *Van) {
 		assert.NotNil(t, b)
 	}
 	bus.Subscribe(Event{}, handler)
@@ -525,7 +525,7 @@ func TestSubscribeFails(t *testing.T) {
 		},
 		"dependency is not an interface": {
 			handler: func(ctx context.Context, event Event, dep int) {},
-			wantErr: "argument 2 must be an interface or a struct, got int",
+			wantErr: "argument 2 must be an interface, struct or *van.Van, got int",
 		},
 		"unknown provider": {
 			handler: func(ctx context.Context, event Event, dep UnknownService) {},
@@ -588,7 +588,7 @@ func TestPublish_MultipleListeners(t *testing.T) {
 
 func TestExec_Bus(t *testing.T) {
 	bus := New()
-	err := bus.Exec(context.Background(), func(b Van) error {
+	err := bus.Exec(context.Background(), func(b *Van) error {
 		assert.NotNil(t, b)
 		assert.Equal(t, bus, b)
 		return nil
@@ -710,7 +710,7 @@ func TestExec_Fails(t *testing.T) {
 		},
 		"invalid signature": {
 			fn:      func() {},
-			wantErr: "fn must have one return value, got 0",
+			wantErr: "function must have one return value, got 0",
 		},
 	}
 

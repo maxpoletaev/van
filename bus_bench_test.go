@@ -302,7 +302,7 @@ func BenchmarkExec_BusAsDependency(b *testing.B) {
 	var err error
 
 	for i := 0; i < b.N; i++ {
-		err = bus.Exec(context.Background(), func(b Van) error {
+		err = bus.Exec(context.Background(), func(b *Van) error {
 			return nil
 		})
 		if err != nil {

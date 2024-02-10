@@ -46,7 +46,7 @@ func TestValidateProviderSignature(t *testing.T) {
 		},
 		"argument not interface": {
 			provider: func(context.Context, int) (interface{}, error) { return nil, nil },
-			wantErr:  "argument 1 must be an interface or a struct, got int",
+			wantErr:  "argument 1 must be an interface, struct or *van.Van, got int",
 		},
 		"dependency struct field is not exported": {
 			provider: func(context.Context, struct{ s interface{} }) (interface{}, error) { return nil, nil },
@@ -100,7 +100,7 @@ func TestValidateHandlerSignature(t *testing.T) {
 		},
 		"third argument is not an interface": {
 			handler: func(context.Context, *struct{}, int) error { return nil },
-			wantErr: "argument 2 must be an interface or a struct, got int",
+			wantErr: "argument 2 must be an interface, struct or *van.Van, got int",
 		},
 		"dependency struct field is not exported": {
 			handler: func(context.Context, *struct{}, struct{ s interface{} }) error { return nil },
@@ -166,7 +166,7 @@ func TestValidateListenerSignature(t *testing.T) {
 		},
 		"third argument is not an interface": {
 			listener: func(context.Context, struct{}, int) {},
-			wantErr:  "argument 2 must be an interface or a struct, got int",
+			wantErr:  "argument 2 must be an interface, struct or *van.Van, got int",
 		},
 		"dependency struct field is not exported": {
 			listener: func(context.Context, struct{}, struct{ s interface{} }) {},
@@ -208,15 +208,15 @@ func TestValidateExecLambdaSignature(t *testing.T) {
 		},
 		"not a function": {
 			fn:      1,
-			wantErr: "fn should be a function, got int",
+			wantErr: "function must be a function, got int",
 		},
 		"no return values": {
 			fn:      func() {},
-			wantErr: "fn must have one return value, got 0",
+			wantErr: "function must have one return value, got 0",
 		},
 		"too many return values": {
 			fn:      func() (int, error) { return 0, nil },
-			wantErr: "fn must have one return value, got 2",
+			wantErr: "function must have one return value, got 2",
 		},
 		"return value is not an error": {
 			fn:      func() int { return 0 },
@@ -224,7 +224,7 @@ func TestValidateExecLambdaSignature(t *testing.T) {
 		},
 		"dependency is not an interface": {
 			fn:      func(int) error { return nil },
-			wantErr: "argument 0 must be an interface or a struct, got int",
+			wantErr: "argument 0 must be an interface, struct or *van.Van, got int",
 		},
 		"dependency struct field is not exported": {
 			fn:      func(struct{ s interface{} }) error { return nil },

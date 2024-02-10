@@ -3,15 +3,15 @@ package van
 import (
 	"context"
 	"fmt"
+	"log"
 	"reflect"
 	"sync"
 )
 
-// Maximum number of arguments to be allocated on the stack.
-// Lower values will use the heap more aggressively which will slow down the program.
-// Higher values will speed up the execution for functions with a large number of
-// dependencies but may increase memory consumption as well.
-const maxArgsOnStack = 16
+// MaxArgs is the maximum number of arguments (dependencies) a function can have.
+// Since we don't want to allocate a dynamic slice for every function call, we use
+// a fixed size array. One can always bypass this limitation by using a dependency struct.
+const MaxArgs = 16
 
 type ProviderFunc interface{} // func(ctx context.Context, deps ...interface{}) (interface{}, error)
 type HandlerFunc interface{}  // func(ctx context.Context, cmd interface{}, deps ...interface{}) error
@@ -33,79 +33,49 @@ func (p *providerOpts) call(args []reflect.Value) (reflect.Value, error) {
 	return instance, err
 }
 
-type Van interface {
-	// Provide registers new type constructor that will be called every time a handler requests the dependency.
-	// There's no such thing as "optional" dependency. Therefore the provider should either return a valid non-nil
-	// dependency or an error.
-	// It is expected to be called during the app startup phase as it performs the run time type checking and
-	// PANICS if an incorrect function type is provided.
-	Provide(provider ProviderFunc)
-
-	// ProvideSingleton registers a new type constructor that is guaranteed to be called not more than once in
-	// application's lifetime.
-	// It is expected to be called during the app startup phase as it performs the run time type checking and
-	// PANICS if an incorrect function type is provided.
-	ProvideSingleton(provider ProviderFunc)
-
-	// Handle registers a handler for the given command type. There can be only one handler per command.
-	// It is expected to be called during the app startup phase as it performs the run time type checking and
-	// PANICS if an incorrect function type is provided.
-	Handle(cmd interface{}, handler HandlerFunc)
-
-	// Subscribe registers a new handler for the given command type. There can be any number of handlers per event.
-	// It is expected to be called during the app startup phase as it performs the run time type checking and
-	// PANICS if an incorrect function type is provided.
-	Subscribe(event interface{}, listeners ...ListenerFunc)
-
-	// Invoke runs an associated command handler.
-	Invoke(ctx context.Context, cmd interface{}) error
-
-	// Publish sends an event to the bus. Listeners are executed concurrently and can fail independently.
-	// Only the first error is returned, even though there might be more than one failing listener.
-	Publish(ctx context.Context, event interface{}) error
-
-	// Exec executes the given function inside the dependency injector.
-	Exec(ctx context.Context, fn interface{}) error
-
-	// Wait blocks until all current events are processed. Useful for graceful shutdown. It is up to
-	// the programmer to ensure that no new events/commands are published. Otherwise, it may run forever.
-	Wait()
-}
-
-type busImpl struct {
+type Van struct {
 	providers map[reflect.Type]*providerOpts
 	listeners map[reflect.Type][]HandlerFunc
 	handlers  map[reflect.Type]HandlerFunc
-	runnig    sync.WaitGroup
+	wg        sync.WaitGroup
 }
 
-func New() Van {
-	b := &busImpl{}
-	b.providers = make(map[reflect.Type]*providerOpts)
-	b.listeners = make(map[reflect.Type][]HandlerFunc)
-	b.handlers = make(map[reflect.Type]HandlerFunc)
-	b.runnig = sync.WaitGroup{}
-
-	return b
+func New() *Van {
+	return &Van{
+		providers: make(map[reflect.Type]*providerOpts),
+		listeners: make(map[reflect.Type][]HandlerFunc),
+		handlers:  make(map[reflect.Type]HandlerFunc),
+	}
 }
 
-func (b *busImpl) Wait() {
-	b.runnig.Wait()
+// Wait blocks until all current events are processed, which may be used for implementing graceful shutdown.
+// It is up to the programmer to ensure that no new events/commands are published, otherwise it may run forever.
+func (b *Van) Wait() {
+	b.wg.Wait()
 }
 
-func (b *busImpl) Provide(provider ProviderFunc) {
+// Provide registers new type constructor that will be called every time a handler requests the dependency.
+// There's no such thing as "optional" dependency. Therefore, the provider should either return a valid non-nil
+// dependency or an error.
+// It is expected to be called during the app startup phase as it performs the run time type checking and
+// panics if an incorrect function type is provided.
+func (b *Van) Provide(provider ProviderFunc) {
 	if err := b.registerProvider(provider, false); err != nil {
 		panic(err)
 	}
 }
 
-func (b *busImpl) ProvideSingleton(provider ProviderFunc) {
+// ProvideSingleton registers a new type constructor that is guaranteed to be called not more than once in
+// application's lifetime.
+// It is expected to be called during the app startup phase as it performs the run time type checking and
+// panics if an incorrect function type is provided.
+func (b *Van) ProvideSingleton(provider ProviderFunc) {
 	if err := b.registerProvider(provider, true); err != nil {
 		panic(err)
 	}
 }
 
-func (b *busImpl) registerProvider(provider ProviderFunc, signleton bool) error {
+func (b *Van) registerProvider(provider ProviderFunc, signleton bool) error {
 	providerType := reflect.TypeOf(provider)
 	if err := validateProviderSignature(providerType); err != nil {
 		return err
@@ -118,7 +88,7 @@ func (b *busImpl) registerProvider(provider ProviderFunc, signleton bool) error 
 		inType := providerType.In(i)
 
 		if inType == retType {
-			return errInvalidDependency.new("provider function has a dependency of the same type")
+			return fmt.Errorf("provider function has a dependency of the same type")
 		}
 
 		if err := b.validateDependency(inType); err != nil {
@@ -126,19 +96,19 @@ func (b *busImpl) registerProvider(provider ProviderFunc, signleton bool) error 
 		}
 
 		if inType == typeContext {
-			takesContext = true
-
 			if signleton {
-				return errInvalidDependency.new("singleton providers cannot use Context as a dependency")
+				return fmt.Errorf("singleton providers cannot use Context as a dependency")
 			}
+
+			takesContext = true
 		}
 
 		if pp, ok := b.providers[inType]; ok && pp.takesContext {
-			takesContext = true
-
 			if signleton {
-				return errInvalidDependency.new("singleton providers cannot depend on providers that take Context")
+				return fmt.Errorf("singleton providers cannot depend on providers that take Context")
 			}
+
+			takesContext = true
 		}
 	}
 
@@ -151,16 +121,19 @@ func (b *busImpl) registerProvider(provider ProviderFunc, signleton bool) error 
 	return nil
 }
 
-func (b *busImpl) Handle(cmd interface{}, handler HandlerFunc) {
+// Handle registers a handler for the given command type. There can be only one handler per command.
+// It is expected to be called during the app startup phase as it performs the run time type checking and
+// panics if an incorrect function type is provided.
+func (b *Van) Handle(cmd interface{}, handler HandlerFunc) {
 	if err := b.registerHandler(cmd, handler); err != nil {
 		panic(err)
 	}
 }
 
-func (b *busImpl) registerHandler(cmd interface{}, handler HandlerFunc) error {
+func (b *Van) registerHandler(cmd interface{}, handler HandlerFunc) error {
 	cmdType := reflect.TypeOf(cmd)
 	if cmdType.Kind() != reflect.Struct {
-		return errInvalidType.fmt("cmd must be a struct, got %s", cmdType.Name())
+		return fmt.Errorf("cmd must be a struct, got %s", cmdType.Name())
 	}
 
 	handlerType := reflect.TypeOf(handler)
@@ -169,7 +142,7 @@ func (b *busImpl) registerHandler(cmd interface{}, handler HandlerFunc) error {
 	}
 
 	if cmdType != handlerType.In(1).Elem() {
-		return errInvalidDependency.new("command type mismatch")
+		return fmt.Errorf("command type mismatch")
 	}
 
 	// start from the third argument as the first two are always `ctx` and `cmd`
@@ -184,48 +157,50 @@ func (b *busImpl) registerHandler(cmd interface{}, handler HandlerFunc) error {
 	return nil
 }
 
-func (b *busImpl) Invoke(ctx context.Context, cmd interface{}) error {
+// Invoke runs an associated command handler.
+func (b *Van) Invoke(ctx context.Context, cmd interface{}) error {
 	cmdType := reflect.TypeOf(cmd)
 	if cmdType.Kind() != reflect.Ptr {
-		return errInvalidType.new("cmd must be a pointer to a struct")
+		return fmt.Errorf("cmd must be a pointer to a struct")
 	}
 
 	cmdType = cmdType.Elem()
 	if cmdType.Kind() != reflect.Struct {
-		return errInvalidType.new("cmd must be a pointer to a struct")
+		return fmt.Errorf("cmd must be a pointer to a struct")
 	}
 
 	handler, ok := b.handlers[cmdType]
 	if !ok {
-		return errInvalidDependency.fmt("no handlers found for type %s", cmdType.String())
+		return fmt.Errorf("no handlers found for type %s", cmdType.String())
 	}
 
-	var args []reflect.Value
+	var args [MaxArgs]reflect.Value
 
 	handlerType := reflect.TypeOf(handler)
+
 	numIn := handlerType.NumIn()
 
-	if numIn <= maxArgsOnStack {
-		var arr [maxArgsOnStack]reflect.Value
-		args = arr[:numIn]
-	} else {
-		args = make([]reflect.Value, numIn)
+	if numIn > len(args) {
+		return fmt.Errorf("too many dependencies for handler %s", handlerType.String())
 	}
 
-	err := b.resolve(ctx, cmd, handlerType, args)
+	err := b.resolve(ctx, cmd, handlerType, args[:numIn])
 	if err != nil {
 		return err
 	}
 
-	b.runnig.Add(1)
-	defer b.runnig.Done()
+	b.wg.Add(1)
+	defer b.wg.Done()
 
-	ret := reflect.ValueOf(handler).Call(args)
+	ret := reflect.ValueOf(handler).Call(args[:numIn])
 
 	return toError(ret[0])
 }
 
-func (b *busImpl) Subscribe(event interface{}, listeners ...ListenerFunc) {
+// Subscribe registers a new handler for the given command type. There can be any number of handlers per event.
+// It is expected to be called during the app startup phase as it performs the run time type checking and
+// panics if an incorrect function type is provided.
+func (b *Van) Subscribe(event interface{}, listeners ...ListenerFunc) {
 	for i := range listeners {
 		err := b.registerListener(event, listeners[i])
 		if err != nil {
@@ -234,10 +209,10 @@ func (b *busImpl) Subscribe(event interface{}, listeners ...ListenerFunc) {
 	}
 }
 
-func (b *busImpl) registerListener(event interface{}, listener ListenerFunc) error {
+func (b *Van) registerListener(event interface{}, listener ListenerFunc) error {
 	eventType := reflect.TypeOf(event)
 	if eventType.Kind() != reflect.Struct {
-		return errInvalidType.fmt("event must be a struct, got %s", eventType.String())
+		return fmt.Errorf("event must be a struct, got %s", eventType.String())
 	}
 
 	listenerType := reflect.TypeOf(listener)
@@ -246,7 +221,7 @@ func (b *busImpl) registerListener(event interface{}, listener ListenerFunc) err
 	}
 
 	if eventType != listenerType.In(1) {
-		return errInvalidType.new("event type mismatch")
+		return fmt.Errorf("event type mismatch")
 	}
 
 	// start from the third argument as the first two are always `ctx` and `event`
@@ -265,61 +240,54 @@ func (b *busImpl) registerListener(event interface{}, listener ListenerFunc) err
 	return nil
 }
 
-func (b *busImpl) Publish(ctx context.Context, event interface{}) error {
+// Publish sends an event to the bus. This is a fire-and-forget non-blocking operation.
+// Each listener will be called in a separate goroutine, and they can fail independently.
+// The error is never propagated back to the publisher, and should be handled by the listener itself.
+func (b *Van) Publish(ctx context.Context, event interface{}) error {
 	eventType := reflect.TypeOf(event)
 	if eventType.Kind() != reflect.Struct {
-		return errInvalidType.fmt("event must be a a struct, got %s", eventType.Name())
+		return fmt.Errorf("event must be a a struct, got %s", eventType.Name())
 	}
 
-	_, ok := b.listeners[eventType]
-	if !ok {
-		return nil
-	}
-
-	b.runnig.Add(1)
+	b.wg.Add(1)
 
 	go func() {
-		defer b.runnig.Done()
-		_ = b.processEvent(ctx, event)
+		defer b.wg.Done()
+		b.processEvent(ctx, event)
 	}()
 
 	return nil
 }
 
-func (b *busImpl) processEvent(ctx context.Context, event interface{}) error {
+func (b *Van) processEvent(ctx context.Context, event interface{}) {
 	eventType := reflect.TypeOf(event)
 
 	listeners, ok := b.listeners[eventType]
-	if !ok {
-		return nil
+	if !ok || len(listeners) == 0 {
+		return
 	}
 
-	var args []reflect.Value
-
 	for i := range listeners {
-		listenerType := reflect.TypeOf(listeners[i])
+		typ := reflect.TypeOf(listeners[i])
 
-		if numIn := listenerType.NumIn(); numIn > 0 {
-			if numIn <= maxArgsOnStack {
-				var arr [maxArgsOnStack]reflect.Value
-				args = arr[:numIn]
-			} else {
-				args = make([]reflect.Value, numIn)
-			}
+		var args [MaxArgs]reflect.Value
 
-			err := b.resolve(ctx, event, listenerType, args)
+		numIn := typ.NumIn()
+
+		if numIn > 0 {
+			err := b.resolve(ctx, event, typ, args[:numIn])
 			if err != nil {
-				return err
+				log.Printf("van: failed to resolve dependencies for %s: %s", typ.String(), err)
+				continue
 			}
 		}
 
-		reflect.ValueOf(listeners[i]).Call(args)
+		reflect.ValueOf(listeners[i]).Call(args[:numIn])
 	}
-
-	return nil
 }
 
-func (b *busImpl) Exec(ctx context.Context, fn interface{}) error {
+// Exec executes the given function inside the dependency injector.
+func (b *Van) Exec(ctx context.Context, fn interface{}) error {
 	funcType := reflect.TypeOf(fn)
 	if err := validateExecLambdaSignature(funcType); err != nil {
 		return err
@@ -331,28 +299,24 @@ func (b *busImpl) Exec(ctx context.Context, fn interface{}) error {
 		}
 	}
 
-	var args []reflect.Value
+	var args [MaxArgs]reflect.Value
 
 	numIn := funcType.NumIn()
-
-	if numIn <= maxArgsOnStack {
-		var arr [maxArgsOnStack]reflect.Value
-		args = arr[:numIn]
-	} else {
-		args = make([]reflect.Value, numIn)
+	if numIn > len(args) {
+		return fmt.Errorf("too many dependencies for function %s", funcType.String())
 	}
 
-	err := b.resolve(ctx, nil, funcType, args)
+	err := b.resolve(ctx, nil, funcType, args[:numIn])
 	if err != nil {
 		return err
 	}
 
-	ret := reflect.ValueOf(fn).Call(args)
+	ret := reflect.ValueOf(fn).Call(args[:numIn])
 
 	return toError(ret[0])
 }
 
-func (b *busImpl) resolve(ctx context.Context, cmd interface{}, funcType reflect.Type, args []reflect.Value) error {
+func (b *Van) resolve(ctx context.Context, cmd interface{}, funcType reflect.Type, args []reflect.Value) error {
 	for i := 0; i < funcType.NumIn(); i++ {
 		argType := funcType.In(i)
 
@@ -384,7 +348,7 @@ func (b *busImpl) resolve(ctx context.Context, cmd interface{}, funcType reflect
 	return nil
 }
 
-func (b *busImpl) buildStruct(ctx context.Context, structType reflect.Type) (reflect.Value, error) {
+func (b *Van) buildStruct(ctx context.Context, structType reflect.Type) (reflect.Value, error) {
 	fields := reflect.VisibleFields(structType)
 	value := reflect.New(structType).Elem()
 
@@ -400,7 +364,7 @@ func (b *busImpl) buildStruct(ctx context.Context, structType reflect.Type) (ref
 	return value, nil
 }
 
-func (b *busImpl) new(ctx context.Context, t reflect.Type) (reflect.Value, error) {
+func (b *Van) new(ctx context.Context, t reflect.Type) (reflect.Value, error) {
 	provider := b.providers[t]
 
 	if provider.singleton {
@@ -422,8 +386,8 @@ func (b *busImpl) new(ctx context.Context, t reflect.Type) (reflect.Value, error
 	providerType := reflect.TypeOf(provider.fn)
 
 	if numIn := providerType.NumIn(); numIn > 0 {
-		if numIn <= maxArgsOnStack {
-			var arr [maxArgsOnStack]reflect.Value
+		if numIn <= MaxArgs {
+			var arr [MaxArgs]reflect.Value
 			args = arr[:numIn]
 		} else {
 			args = make([]reflect.Value, numIn)
@@ -443,7 +407,7 @@ func (b *busImpl) new(ctx context.Context, t reflect.Type) (reflect.Value, error
 	return inst, nil
 }
 
-func (b *busImpl) newSingleton(ctx context.Context, t reflect.Type) (reflect.Value, error) {
+func (b *Van) newSingleton(ctx context.Context, t reflect.Type) (reflect.Value, error) {
 	provider := b.providers[t]
 
 	provider.Lock()
@@ -458,8 +422,8 @@ func (b *busImpl) newSingleton(ctx context.Context, t reflect.Type) (reflect.Val
 	providerType := reflect.TypeOf(provider.fn)
 
 	if numIn := providerType.NumIn(); numIn > 0 {
-		if numIn <= maxArgsOnStack {
-			var arr [maxArgsOnStack]reflect.Value
+		if numIn <= MaxArgs {
+			var arr [MaxArgs]reflect.Value
 			args = arr[:numIn]
 		} else {
 			args = make([]reflect.Value, numIn)
@@ -481,7 +445,7 @@ func (b *busImpl) newSingleton(ctx context.Context, t reflect.Type) (reflect.Val
 	return inst, nil
 }
 
-func (b *busImpl) validateDependency(t reflect.Type) error {
+func (b *Van) validateDependency(t reflect.Type) error {
 	if t.Kind() == reflect.Struct {
 		for _, field := range reflect.VisibleFields(t) {
 			if err := b.validateDependency(field.Type); err != nil {
@@ -496,5 +460,5 @@ func (b *busImpl) validateDependency(t reflect.Type) error {
 		return nil
 	}
 
-	return errInvalidDependency.fmt("no providers registered for type %s", t.String())
+	return fmt.Errorf("no providers registered for type %s", t.String())
 }
