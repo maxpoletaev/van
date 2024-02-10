@@ -381,25 +381,24 @@ func (b *Van) new(ctx context.Context, t reflect.Type) (reflect.Value, error) {
 		return reflect.ValueOf(provider.instance), nil
 	}
 
-	var args []reflect.Value
+	var args [MaxArgs]reflect.Value
 
 	providerType := reflect.TypeOf(provider.fn)
 
-	if numIn := providerType.NumIn(); numIn > 0 {
-		if numIn <= MaxArgs {
-			var arr [MaxArgs]reflect.Value
-			args = arr[:numIn]
-		} else {
-			args = make([]reflect.Value, numIn)
-		}
+	numArgs := providerType.NumIn()
 
-		err := b.resolve(ctx, nil, providerType, args)
+	if numArgs > len(args) {
+		return reflect.ValueOf(nil), fmt.Errorf("too many dependencies for provider %s", providerType.String())
+	}
+
+	if numArgs > 0 {
+		err := b.resolve(ctx, nil, providerType, args[:numArgs])
 		if err != nil {
 			return reflect.ValueOf(nil), err
 		}
 	}
 
-	inst, err := provider.call(args)
+	inst, err := provider.call(args[:numArgs])
 	if err != nil {
 		return reflect.ValueOf(nil), fmt.Errorf("failed to resolve dependency %s: %w", t.String(), err)
 	}
