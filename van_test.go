@@ -2,12 +2,35 @@ package van
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
+
+func panicsWithError(t *testing.T, wantErr string, f func()) {
+	t.Helper()
+
+	defer func() {
+		if ret := recover(); ret != nil {
+			var gotErr string
+			switch ret := ret.(type) {
+			case error:
+				gotErr = ret.Error()
+			case string:
+				gotErr = ret
+			default:
+				t.Fatalf("unexpected panic: %v", ret)
+			}
+
+			if gotErr != wantErr {
+				t.Fatalf("got %q, want %q", gotErr, wantErr)
+			}
+		}
+	}()
+
+	f()
+	t.Fatalf("should have panicked")
+}
 
 type Command struct {
 	Result int
@@ -36,6 +59,7 @@ type UnknownService interface{}
 
 func TestProvide(t *testing.T) {
 	bus := New()
+
 	setIntService := &SetIntSevriceImpl{}
 
 	bus.Provide(func() (SetIntService, error) {
@@ -43,28 +67,44 @@ func TestProvide(t *testing.T) {
 	})
 
 	bus.Provide(func(b *Van, s SetIntService) (GetIntService, error) {
-		assert.Equal(t, bus, b)
-		assert.Equal(t, setIntService, s)
+		if b != bus {
+			t.Fatal("different *Van instance")
+		}
+
+		if s != setIntService {
+			t.Fatalf("expected %v, got %v", setIntService, s)
+		}
+
 		return &GetIntServiceImpl{}, nil
 	})
 
-	assert.Len(t, bus.providers, 2)
+	if len(bus.providers) != 2 {
+		t.Fatal("expected 2 providers")
+	}
 }
 
 func TestProvide_NoDeps(t *testing.T) {
 	bus := New()
+
 	bus.Provide(func() (GetIntService, error) {
 		return &GetIntServiceImpl{}, nil
 	})
-	assert.Len(t, bus.providers, 1)
+
+	if len(bus.providers) != 1 {
+		t.Fatal("expected 1 provider")
+	}
 }
 
 func TestProvide_WithContext(t *testing.T) {
 	bus := New()
+
 	bus.Provide(func(ctx context.Context) (GetIntService, error) {
 		return &GetIntServiceImpl{}, nil
 	})
-	assert.Len(t, bus.providers, 1)
+
+	if len(bus.providers) != 1 {
+		t.Fatal("expected 1 provider")
+	}
 }
 
 func TestProvideFails(t *testing.T) {
@@ -115,7 +155,8 @@ func TestProvideFails(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			bus := New()
-			assert.PanicsWithError(t, tt.wantErr, func() {
+
+			panicsWithError(t, tt.wantErr, func() {
 				bus.Provide(tt.provider)
 			})
 		})
@@ -124,10 +165,14 @@ func TestProvideFails(t *testing.T) {
 
 func TestProvideSingleton(t *testing.T) {
 	bus := New()
+
 	bus.ProvideSingleton(func() (GetIntService, error) {
 		return &GetIntServiceImpl{}, nil
 	})
-	assert.Len(t, bus.providers, 1)
+
+	if len(bus.providers) != 1 {
+		t.Fatal("expected 1 provider")
+	}
 
 	var opts *providerOpts
 	for k := range bus.providers {
@@ -135,7 +180,9 @@ func TestProvideSingleton(t *testing.T) {
 		break
 	}
 
-	assert.True(t, opts.singleton)
+	if !opts.singleton {
+		t.Fatal("expected singleton provider")
+	}
 }
 
 func TestProvideSingletonFails(t *testing.T) {
@@ -192,7 +239,8 @@ func TestProvideSingletonFails(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			bus := New()
-			assert.PanicsWithError(t, tt.wantErr, func() {
+
+			panicsWithError(t, tt.wantErr, func() {
 				bus.ProvideSingleton(tt.provider)
 			})
 		})
@@ -204,7 +252,7 @@ func TestProvideSingletonFails_ParentProviderTakesContext(t *testing.T) {
 	bus.Provide(func(ctx context.Context) (serviceA, error) { return &serviceImpl{}, nil })
 	bus.Provide(func(a serviceA) (serviceB, error) { return &serviceImpl{}, nil })
 
-	assert.PanicsWithError(t, "singleton providers cannot depend on providers that take Context", func() {
+	panicsWithError(t, "singleton providers cannot depend on providers that take Context", func() {
 		bus.ProvideSingleton(func(b serviceB) (serviceC, error) {
 			return &serviceImpl{}, nil
 		})
@@ -213,10 +261,14 @@ func TestProvideSingletonFails_ParentProviderTakesContext(t *testing.T) {
 
 func TestHandle(t *testing.T) {
 	bus := New()
+
 	bus.Handle(Command{}, func(ctx context.Context, cmd *Command, bus *Van) error {
 		return nil
 	})
-	assert.Len(t, bus.handlers, 1)
+
+	if len(bus.handlers) != 1 {
+		t.Fatal("expected 1 handler")
+	}
 }
 
 func TestHandleFails(t *testing.T) {
@@ -288,7 +340,8 @@ func TestHandleFails(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			bus := New()
-			assert.PanicsWithError(t, tt.wantErr, func() {
+
+			panicsWithError(t, tt.wantErr, func() {
 				bus.Handle(tt.cmd, tt.handler)
 			})
 		})
@@ -313,11 +366,19 @@ func TestInvoke(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		err := bus.Invoke(ctx, &Command{})
-		assert.NoError(t, err)
+
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	assert.Equal(t, 5, providerExecuted)
-	assert.Equal(t, 5, handlerExecuted)
+	if providerExecuted != 5 {
+		t.Fatalf("providerExecuted != 5, got %d", providerExecuted)
+	}
+
+	if handlerExecuted != 5 {
+		t.Fatalf("handlerExecuted != 5, got %d", handlerExecuted)
+	}
 }
 
 func TestInvoke_StructDeps(t *testing.T) {
@@ -342,11 +403,19 @@ func TestInvoke_StructDeps(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		err := bus.Invoke(ctx, &Command{})
-		assert.NoError(t, err)
+
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	assert.Equal(t, 5, providerExecuted)
-	assert.Equal(t, 5, handlerExecuted)
+	if providerExecuted != 5 {
+		t.Fatalf("providerExecuted != 5, got %d", providerExecuted)
+	}
+
+	if handlerExecuted != 5 {
+		t.Fatalf("handlerExecuted != 5, got %d", handlerExecuted)
+	}
 }
 
 func TestInvoke_Concurrent(t *testing.T) {
@@ -385,9 +454,17 @@ func TestInvoke_Concurrent(t *testing.T) {
 	close(start)
 	wg.Wait()
 
-	assert.Len(t, errchan, 0)
-	assert.Len(t, providerExecuted, 5)
-	assert.Len(t, handlerExecuted, 5)
+	if len(errchan) > 0 {
+		t.Fatal(<-errchan)
+	}
+
+	if len(providerExecuted) != 5 {
+		t.Fatalf("providerExecuted != 5, got %d", len(providerExecuted))
+	}
+
+	if len(handlerExecuted) != 5 {
+		t.Fatalf("handlerExecuted != 5, got %d", len(handlerExecuted))
+	}
 }
 
 func TestInvoke_SingletonConcurrent(t *testing.T) {
@@ -426,9 +503,17 @@ func TestInvoke_SingletonConcurrent(t *testing.T) {
 	close(start)
 	wg.Wait()
 
-	assert.Len(t, errchan, 0)
-	assert.Len(t, providerExecuted, 1)
-	assert.Len(t, handlerExecuted, 5)
+	if len(errchan) > 0 {
+		t.Fatal(<-errchan)
+	}
+
+	if len(providerExecuted) != 1 {
+		t.Fatalf("providerExecuted != 1, got %d", len(providerExecuted))
+	}
+
+	if len(handlerExecuted) != 5 {
+		t.Fatalf("handlerExecuted != 5, got %d", len(handlerExecuted))
+	}
 }
 
 func TestInvokeFails(t *testing.T) {
@@ -459,7 +544,14 @@ func TestInvokeFails(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			err := bus.Invoke(ctx, tt.cmd)
-			assert.Equal(t, tt.wantErrMsg, err.Error())
+
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+
+			if err.Error() != tt.wantErrMsg {
+				t.Fatalf("got %q, want %q", err.Error(), tt.wantErrMsg)
+			}
 		})
 	}
 }
@@ -467,39 +559,65 @@ func TestInvokeFails(t *testing.T) {
 func TestInvokeFails_ProviderError(t *testing.T) {
 	var providerExecuted, handlerExecuted int
 
+	wantErr := errors.New("provider error")
+
 	bus := New()
+
 	bus.Provide(func() (GetIntService, error) {
 		providerExecuted++
-		return nil, assert.AnError
+		return nil, wantErr
 	})
+
 	bus.Handle(Command{}, func(ctx context.Context, cmd *Command, s GetIntService) error {
 		handlerExecuted++
 		return nil
 	})
 
 	err := bus.Invoke(context.Background(), &Command{})
-	assert.ErrorIs(t, err, assert.AnError)
-	assert.Equal(t, 1, providerExecuted)
-	assert.Equal(t, 0, handlerExecuted)
+
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("got %v, want %v", err, wantErr)
+	}
+
+	if providerExecuted != 1 {
+		t.Fatalf("providerExecuted != 1, got %d", providerExecuted)
+	}
+
+	if handlerExecuted != 0 {
+		t.Fatalf("handlerExecuted != 0, got %d", handlerExecuted)
+	}
 }
 
 func TestInvokeFails_HandlerError(t *testing.T) {
 	bus := New()
+
+	wantErr := errors.New("handler error")
+
 	bus.Handle(Command{}, func(ctx context.Context, cmd *Command) error {
-		return assert.AnError
+		return wantErr
 	})
 
 	err := bus.Invoke(context.Background(), &Command{})
-	assert.Error(t, assert.AnError, err)
+
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("got %v, want %v", err, wantErr)
+	}
 }
 
 func TestHandleEvent(t *testing.T) {
 	bus := New()
+
 	handler := func(ctx context.Context, event Event, b *Van) {
-		assert.NotNil(t, b)
+		if b == nil {
+			t.Fatal("expected *Van, got nil")
+		}
 	}
+
 	bus.Subscribe(Event{}, handler)
-	assert.Len(t, bus.listeners, 1)
+
+	if len(bus.listeners) != 1 {
+		t.Fatal("expected 1 listener")
+	}
 }
 
 func TestSubscribeFails(t *testing.T) {
@@ -541,7 +659,7 @@ func TestSubscribeFails(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			assert.PanicsWithError(t, tt.wantErr, func() {
+			panicsWithError(t, tt.wantErr, func() {
 				bus.Subscribe(Event{}, tt.handler)
 			})
 		})
@@ -561,8 +679,13 @@ func TestPublish_SingleListener(t *testing.T) {
 
 	bus.Wait()
 
-	require.NoError(t, err)
-	assert.Equal(t, 1, eventTriggered)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if eventTriggered != 1 {
+		t.Fatalf("eventTriggered != 1, got %d", eventTriggered)
+	}
 }
 
 func TestPublish_MultipleListeners(t *testing.T) {
@@ -581,19 +704,33 @@ func TestPublish_MultipleListeners(t *testing.T) {
 
 	bus.Wait()
 
-	require.NoError(t, err)
-	assert.Equal(t, 1, listenerACalled)
-	assert.Equal(t, 1, listenerBCalled)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if listenerACalled != 1 {
+		t.Fatalf("listenerACalled != 1, got %d", listenerACalled)
+	}
+
+	if listenerBCalled != 1 {
+		t.Fatalf("listenerBCalled != 1, got %d", listenerBCalled)
+	}
 }
 
 func TestExec_Bus(t *testing.T) {
 	bus := New()
+
 	err := bus.Exec(context.Background(), func(b *Van) error {
-		assert.NotNil(t, b)
-		assert.Equal(t, bus, b)
+		if b != bus {
+			t.Fatalf("different Van instance")
+		}
+
 		return nil
 	})
-	assert.NoError(t, err)
+
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestExec_ProviderContext(t *testing.T) {
@@ -603,8 +740,11 @@ func TestExec_ProviderContext(t *testing.T) {
 	bus := New()
 
 	bus.Provide(func(c context.Context) (GetIntService, error) {
+		if c != ctx {
+			t.Fatalf("different context")
+		}
+
 		providerCalled++
-		assert.Equal(t, ctx, c)
 		return &GetIntServiceImpl{}, nil
 	})
 
@@ -613,8 +753,13 @@ func TestExec_ProviderContext(t *testing.T) {
 		return nil
 	})
 
-	assert.NoError(t, err)
-	assert.Equal(t, 1, providerCalled)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if providerCalled != 1 {
+		t.Fatalf("providerCalled != 1, got %d", providerCalled)
+	}
 }
 
 func TestExec_Transitive(t *testing.T) {
@@ -628,15 +773,27 @@ func TestExec_Transitive(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		err := bus.Exec(context.Background(), func(s GetIntService) error {
-			assert.NotNil(t, s)
+			if s == nil {
+				t.Fatal("expected GetIntService, got nil")
+			}
+
 			handlerExecuted++
+
 			return nil
 		})
-		assert.NoError(t, err)
+
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	assert.Equal(t, 5, providerExecuted)
-	assert.Equal(t, 5, handlerExecuted)
+	if providerExecuted != 5 {
+		t.Fatal("providerExecuted != 5")
+	}
+
+	if handlerExecuted != 5 {
+		t.Fatal("handlerExecuted != 5")
+	}
 }
 
 func TestExec_Singleton(t *testing.T) {
@@ -650,15 +807,27 @@ func TestExec_Singleton(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		err := bus.Exec(context.Background(), func(s GetIntService) error {
-			assert.NotNil(t, s)
+			if s == nil {
+				t.Fatal("expected GetIntService, got nil")
+			}
+
 			handlerExecuted++
+
 			return nil
 		})
-		assert.NoError(t, err)
+
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	assert.Equal(t, 1, providerExecuted)
-	assert.Equal(t, 5, handlerExecuted)
+	if providerExecuted != 1 {
+		t.Fatal("providerExecuted != 1")
+	}
+
+	if handlerExecuted != 5 {
+		t.Fatal("handlerExecuted != 5")
+	}
 }
 
 func TestExec_Concurrent(t *testing.T) {
@@ -683,9 +852,13 @@ func TestExec_Concurrent(t *testing.T) {
 			defer wg.Done()
 
 			err := bus.Exec(context.Background(), func(s GetIntService) error {
-				assert.NotNil(t, s)
+				if s == nil {
+					t.Fatal("expected GetIntService, got nil")
+				}
+
 				return nil
 			})
+
 			if err != nil {
 				errchan <- err
 			}
@@ -695,8 +868,13 @@ func TestExec_Concurrent(t *testing.T) {
 	close(start)
 	wg.Wait()
 
-	assert.Len(t, errchan, 0)
-	assert.Equal(t, 1, providerExecuted)
+	if len(errchan) > 0 {
+		t.Fatal(<-errchan)
+	}
+
+	if providerExecuted != 1 {
+		t.Fatal("providerExecuted != 1")
+	}
 }
 
 func TestExec_Fails(t *testing.T) {
@@ -720,8 +898,14 @@ func TestExec_Fails(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			err := bus.Exec(ctx, tt.fn)
-			assert.Error(t, err)
-			assert.EqualError(t, err, tt.wantErr)
+
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+
+			if err.Error() != tt.wantErr {
+				t.Fatalf("got %q, want %q", err.Error(), tt.wantErr)
+			}
 		})
 	}
 }

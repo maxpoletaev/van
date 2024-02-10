@@ -4,14 +4,20 @@ import (
 	"context"
 	"reflect"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
 )
 
 func TestIsStructPtr(t *testing.T) {
-	assert.True(t, isStructPtr(reflect.TypeOf(&struct{}{})))
-	assert.False(t, isStructPtr(reflect.TypeOf(struct{}{})))
-	assert.False(t, isStructPtr(reflect.TypeOf(1)))
+	if !isStructPtr(reflect.TypeOf(&struct{}{})) {
+		t.Errorf("expected true, got false")
+	}
+
+	if isStructPtr(reflect.TypeOf(struct{}{})) {
+		t.Errorf("expected false, got true")
+	}
+
+	if isStructPtr(reflect.TypeOf(1)) {
+		t.Errorf("expected false, got true")
+	}
 }
 
 func TestValidateProviderSignature(t *testing.T) {
@@ -62,11 +68,19 @@ func TestValidateProviderSignature(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			providerType := reflect.TypeOf(tt.provider)
 			err := validateProviderSignature(providerType)
+
 			if tt.wantOk {
-				assert.NoError(t, err)
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
 			} else {
-				assert.Error(t, err)
-				assert.EqualError(t, err, tt.wantErr)
+				if err == nil {
+					t.Errorf("expected error, got nil")
+				}
+
+				if err.Error() != tt.wantErr {
+					t.Errorf("expected error %q, got %q", tt.wantErr, err.Error())
+				}
 			}
 		})
 	}
@@ -128,11 +142,19 @@ func TestValidateHandlerSignature(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			handlerType := reflect.TypeOf(tt.handler)
 			err := validateHandlerSignature(handlerType)
+
 			if tt.wantOk {
-				assert.NoError(t, err)
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
 			} else {
-				assert.Error(t, err)
-				assert.EqualError(t, err, tt.wantErr)
+				if err == nil {
+					t.Errorf("expected error, got nil")
+				}
+
+				if err.Error() != tt.wantErr {
+					t.Errorf("expected error %q, got %q", tt.wantErr, err.Error())
+				}
 			}
 		})
 	}
@@ -186,11 +208,19 @@ func TestValidateListenerSignature(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			listenerType := reflect.TypeOf(tt.listener)
 			err := validateListenerSignature(listenerType)
+
 			if tt.wantOk {
-				assert.NoError(t, err)
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
 			} else {
-				assert.Error(t, err)
-				assert.EqualError(t, err, tt.wantErr)
+				if err == nil {
+					t.Errorf("expected error, got nil")
+				}
+
+				if err.Error() != tt.wantErr {
+					t.Errorf("expected error %q, got %q", tt.wantErr, err.Error())
+				}
 			}
 		})
 	}
@@ -242,10 +272,17 @@ func TestValidateExecLambdaSignature(t *testing.T) {
 			err := validateExecLambdaSignature(fnType)
 
 			if tt.wantOk {
-				assert.NoError(t, err)
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
 			} else {
-				assert.Error(t, err)
-				assert.EqualError(t, err, tt.wantErr)
+				if err == nil {
+					t.Errorf("expected error, got nil")
+				}
+
+				if err.Error() != tt.wantErr {
+					t.Errorf("expected error %q, got %q", tt.wantErr, err.Error())
+				}
 			}
 		})
 	}
