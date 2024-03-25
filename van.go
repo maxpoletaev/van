@@ -189,9 +189,6 @@ func (b *Van) Invoke(ctx context.Context, cmd interface{}) error {
 		return err
 	}
 
-	b.wg.Add(1)
-	defer b.wg.Done()
-
 	ret := reflect.ValueOf(handler).Call(args[:numIn])
 
 	return toError(ret[0])
@@ -274,6 +271,11 @@ func (b *Van) processEvent(ctx context.Context, event interface{}) {
 
 		numIn := typ.NumIn()
 
+		if numIn > len(args) {
+			log.Printf("van: too many dependencies for listener %s", typ.String())
+			continue
+		}
+
 		if numIn > 0 {
 			err := b.resolve(ctx, event, typ, args[:numIn])
 			if err != nil {
@@ -302,6 +304,7 @@ func (b *Van) Exec(ctx context.Context, fn interface{}) error {
 	var args [MaxArgs]reflect.Value
 
 	numIn := funcType.NumIn()
+
 	if numIn > len(args) {
 		return fmt.Errorf("too many dependencies for function %s", funcType.String())
 	}
@@ -381,24 +384,24 @@ func (b *Van) new(ctx context.Context, t reflect.Type) (reflect.Value, error) {
 		return reflect.ValueOf(provider.instance), nil
 	}
 
-	var args [MaxArgs]reflect.Value
-
 	providerType := reflect.TypeOf(provider.fn)
 
-	numArgs := providerType.NumIn()
+	var args [MaxArgs]reflect.Value
 
-	if numArgs > len(args) {
+	numIn := providerType.NumIn()
+
+	if numIn > len(args) {
 		return reflect.ValueOf(nil), fmt.Errorf("too many dependencies for provider %s", providerType.String())
 	}
 
-	if numArgs > 0 {
-		err := b.resolve(ctx, nil, providerType, args[:numArgs])
+	if numIn > 0 {
+		err := b.resolve(ctx, nil, providerType, args[:numIn])
 		if err != nil {
 			return reflect.ValueOf(nil), err
 		}
 	}
 
-	inst, err := provider.call(args[:numArgs])
+	inst, err := provider.call(args[:numIn])
 	if err != nil {
 		return reflect.ValueOf(nil), fmt.Errorf("failed to resolve dependency %s: %w", t.String(), err)
 	}
@@ -416,25 +419,24 @@ func (b *Van) newSingleton(ctx context.Context, t reflect.Type) (reflect.Value, 
 		return reflect.ValueOf(provider.instance), nil
 	}
 
-	var args []reflect.Value
-
 	providerType := reflect.TypeOf(provider.fn)
 
-	if numIn := providerType.NumIn(); numIn > 0 {
-		if numIn <= MaxArgs {
-			var arr [MaxArgs]reflect.Value
-			args = arr[:numIn]
-		} else {
-			args = make([]reflect.Value, numIn)
-		}
+	var args [MaxArgs]reflect.Value
 
-		err := b.resolve(ctx, nil, providerType, args)
+	numIn := providerType.NumIn()
+
+	if numIn > len(args) {
+		return reflect.ValueOf(nil), fmt.Errorf("too many dependencies for provider %s", providerType.String())
+	}
+
+	if numIn > 0 {
+		err := b.resolve(ctx, nil, providerType, args[:numIn])
 		if err != nil {
 			return reflect.ValueOf(nil), err
 		}
 	}
 
-	inst, err := provider.call(args)
+	inst, err := provider.call(args[:numIn])
 	if err != nil {
 		return reflect.ValueOf(nil), fmt.Errorf("failed to resolve dependency %s: %w", t.String(), err)
 	}

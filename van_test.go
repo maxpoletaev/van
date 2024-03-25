@@ -694,6 +694,7 @@ func TestPublish_MultipleListeners(t *testing.T) {
 	listenerA := func(ctx context.Context, event Event) {
 		listenerACalled++
 	}
+
 	listenerB := func(ctx context.Context, event Event) {
 		listenerBCalled++
 	}
@@ -762,7 +763,7 @@ func TestExec_ProviderContext(t *testing.T) {
 	}
 }
 
-func TestExec_Transitive(t *testing.T) {
+func TestExec_Regular(t *testing.T) {
 	var providerExecuted, handlerExecuted int
 
 	bus := New()
@@ -853,7 +854,7 @@ func TestExec_Concurrent(t *testing.T) {
 
 			err := bus.Exec(context.Background(), func(s GetIntService) error {
 				if s == nil {
-					t.Fatal("expected GetIntService, got nil")
+					return errors.New("expected GetIntService, got nil")
 				}
 
 				return nil
