@@ -8,10 +8,10 @@ import (
 	"sync"
 )
 
-// MaxArgs is the maximum number of arguments (dependencies) a function can have.
+// maxArgs is the maximum number of arguments (dependencies) a function can have.
 // Since we don't want to allocate a dynamic slice for every function call, we use
 // a fixed size array. One can always bypass this limitation by using a dependency struct.
-const MaxArgs = 16
+const maxArgs = 16
 
 type ProviderFunc interface{} // func(ctx context.Context, deps ...interface{}) (interface{}, error)
 type HandlerFunc interface{}  // func(ctx context.Context, cmd interface{}, deps ...interface{}) error
@@ -65,11 +65,11 @@ func (b *Van) Provide(provider ProviderFunc) {
 	}
 }
 
-// ProvideSingleton registers a new type constructor that is guaranteed to be called not more than once in
+// ProvideOnce registers a new type constructor that is guaranteed to be called not more than once in
 // application's lifetime.
 // It is expected to be called during the app startup phase as it performs the run time type checking and
 // panics if an incorrect function type is provided.
-func (b *Van) ProvideSingleton(provider ProviderFunc) {
+func (b *Van) ProvideOnce(provider ProviderFunc) {
 	if err := b.registerProvider(provider, true); err != nil {
 		panic(err)
 	}
@@ -174,7 +174,7 @@ func (b *Van) Invoke(ctx context.Context, cmd interface{}) error {
 		return fmt.Errorf("no handlers found for type %s", cmdType.String())
 	}
 
-	var args [MaxArgs]reflect.Value
+	var args [maxArgs]reflect.Value
 
 	handlerType := reflect.TypeOf(handler)
 
@@ -240,7 +240,7 @@ func (b *Van) registerListener(event interface{}, listener ListenerFunc) error {
 // Publish sends an event to the bus. This is a fire-and-forget non-blocking operation.
 // Each listener will be called in a separate goroutine, and they can fail independently.
 // The error is never propagated back to the publisher, and should be handled by the listener itself.
-func (b *Van) Publish(ctx context.Context, event interface{}) error {
+func (b *Van) Publish(event interface{}) error {
 	eventType := reflect.TypeOf(event)
 	if eventType.Kind() != reflect.Struct {
 		return fmt.Errorf("event must be a a struct, got %s", eventType.Name())
@@ -250,13 +250,13 @@ func (b *Van) Publish(ctx context.Context, event interface{}) error {
 
 	go func() {
 		defer b.wg.Done()
-		b.processEvent(ctx, event)
+		b.processEvent(event)
 	}()
 
 	return nil
 }
 
-func (b *Van) processEvent(ctx context.Context, event interface{}) {
+func (b *Van) processEvent(event interface{}) {
 	eventType := reflect.TypeOf(event)
 
 	listeners, ok := b.listeners[eventType]
@@ -264,10 +264,13 @@ func (b *Van) processEvent(ctx context.Context, event interface{}) {
 		return
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	for i := range listeners {
 		typ := reflect.TypeOf(listeners[i])
 
-		var args [MaxArgs]reflect.Value
+		var args [maxArgs]reflect.Value
 
 		numIn := typ.NumIn()
 
@@ -291,6 +294,7 @@ func (b *Van) processEvent(ctx context.Context, event interface{}) {
 // Exec executes the given function inside the dependency injector.
 func (b *Van) Exec(ctx context.Context, fn interface{}) error {
 	funcType := reflect.TypeOf(fn)
+
 	if err := validateExecLambdaSignature(funcType); err != nil {
 		return err
 	}
@@ -301,7 +305,7 @@ func (b *Van) Exec(ctx context.Context, fn interface{}) error {
 		}
 	}
 
-	var args [MaxArgs]reflect.Value
+	var args [maxArgs]reflect.Value
 
 	numIn := funcType.NumIn()
 
@@ -386,7 +390,7 @@ func (b *Van) new(ctx context.Context, t reflect.Type) (reflect.Value, error) {
 
 	providerType := reflect.TypeOf(provider.fn)
 
-	var args [MaxArgs]reflect.Value
+	var args [maxArgs]reflect.Value
 
 	numIn := providerType.NumIn()
 
@@ -421,7 +425,7 @@ func (b *Van) newSingleton(ctx context.Context, t reflect.Type) (reflect.Value, 
 
 	providerType := reflect.TypeOf(provider.fn)
 
-	var args [MaxArgs]reflect.Value
+	var args [maxArgs]reflect.Value
 
 	numIn := providerType.NumIn()
 

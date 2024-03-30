@@ -140,25 +140,25 @@ func BenchmarkInvoke_LargeGraphSingletons(b *testing.B) {
 	ctx := context.Background()
 	bus := New()
 
-	bus.ProvideSingleton(func() (serviceA, error) {
+	bus.ProvideOnce(func() (serviceA, error) {
 		return &serviceImpl{ret: 1}, nil
 	})
-	bus.ProvideSingleton(func(a serviceA) (serviceB, error) {
+	bus.ProvideOnce(func(a serviceA) (serviceB, error) {
 		a.Run()
 		return &serviceImpl{ret: 2}, nil
 	})
-	bus.ProvideSingleton(func(a serviceA, b serviceB) (serviceC, error) {
+	bus.ProvideOnce(func(a serviceA, b serviceB) (serviceC, error) {
 		a.Run()
 		b.Run()
 		return &serviceImpl{ret: 3}, nil
 	})
-	bus.ProvideSingleton(func(a serviceA, b serviceB, c serviceC) (serviceD, error) {
+	bus.ProvideOnce(func(a serviceA, b serviceB, c serviceC) (serviceD, error) {
 		a.Run()
 		b.Run()
 		c.Run()
 		return &serviceImpl{ret: 4}, nil
 	})
-	bus.ProvideSingleton(func(a serviceA, b serviceB, c serviceC, d serviceD) (serviceE, error) {
+	bus.ProvideOnce(func(a serviceA, b serviceB, c serviceC, d serviceD) (serviceE, error) {
 		a.Run()
 		b.Run()
 		c.Run()
@@ -264,11 +264,10 @@ func BenchmarkPublish_LageGraphTransitive(b *testing.B) {
 
 	b.ResetTimer()
 
-	ctx := context.Background()
 	event := benchEvent{val: 1}
 
 	for i := 0; i < b.N; i++ {
-		err = bus.Publish(ctx, event)
+		err = bus.Publish(event)
 		if err != nil {
 			b.Fatal(err)
 		}

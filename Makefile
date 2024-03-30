@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := help
 
 PKGNAME = github.com/maxpoletaev/van
+BENCHNAME ?= .
 GO = go
 
 .PHONY: help
@@ -15,22 +16,21 @@ test:  ## run go tests
 
 .PHONY: bench
 bench:  ## run benchmarks
-	$(GO) test -bench=. -run=^$$ -benchmem
+	$(GO) test -bench=$(BENCHNAME) -run=^$$ -benchmem
 
 .PHONY: benchprof
 benchprof: ## run benchmarks with profiling
-	$(GO) test -bench=. -run=^$$ -benchmem -cpuprofile=cpu.pprof -memprofile=mem.pprof
+	$(GO) test -bench=$(BENCHNAME) -run=^$$ -benchmem -cpuprofile=cpu.pprof -memprofile=mem.pprof
 
 .PHONY: benchcmp
 benchcmp:  ## run benchmarks and compare with the previous benchcmp run
-	$(GO) test -bench=. -run=^$$ -benchmem > bench.txt
+	$(GO) test -bench=$(BENCHNAME) -run=^$$ -benchmem > bench.txt
 	@benchcmp bench.old.txt bench.txt
 
 .PHONY: newbenchcmp
 newbenchcmp:  ## run benchmarks and create new compare file
-	[ -f bench.txt ] && mv bench.txt bench.old.txt || true
-	$(GO) test -bench=. -run=^$$ -benchmem > bench.txt
-	@cat bench.txt
+	$(GO) test -bench=$(BENCHNAME) -run=^$$ -benchmem > bench.old.txt
+	@cat bench.old.txt
 
 .PHONY: godoc
 godoc:  ## start godoc server at :8000

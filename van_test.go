@@ -166,7 +166,7 @@ func TestProvideFails(t *testing.T) {
 func TestProvideSingleton(t *testing.T) {
 	bus := New()
 
-	bus.ProvideSingleton(func() (GetIntService, error) {
+	bus.ProvideOnce(func() (GetIntService, error) {
 		return &GetIntServiceImpl{}, nil
 	})
 
@@ -241,7 +241,7 @@ func TestProvideSingletonFails(t *testing.T) {
 			bus := New()
 
 			panicsWithError(t, tt.wantErr, func() {
-				bus.ProvideSingleton(tt.provider)
+				bus.ProvideOnce(tt.provider)
 			})
 		})
 	}
@@ -253,7 +253,7 @@ func TestProvideSingletonFails_ParentProviderTakesContext(t *testing.T) {
 	bus.Provide(func(a serviceA) (serviceB, error) { return &serviceImpl{}, nil })
 
 	panicsWithError(t, "singleton providers cannot depend on providers that take Context", func() {
-		bus.ProvideSingleton(func(b serviceB) (serviceC, error) {
+		bus.ProvideOnce(func(b serviceB) (serviceC, error) {
 			return &serviceImpl{}, nil
 		})
 	})
@@ -472,7 +472,7 @@ func TestInvoke_SingletonConcurrent(t *testing.T) {
 	handlerExecuted := make(chan bool, 5)
 
 	bus := New()
-	bus.ProvideSingleton(func() (serviceA, error) {
+	bus.ProvideOnce(func() (serviceA, error) {
 		providerExecuted <- true
 		return &serviceImpl{}, nil
 	})
@@ -675,7 +675,7 @@ func TestPublish_SingleListener(t *testing.T) {
 
 	bus := New()
 	bus.Subscribe(Event{}, listener)
-	err := bus.Publish(context.Background(), Event{})
+	err := bus.Publish(Event{})
 
 	bus.Wait()
 
@@ -701,7 +701,7 @@ func TestPublish_MultipleListeners(t *testing.T) {
 
 	bus := New()
 	bus.Subscribe(Event{}, listenerA, listenerB)
-	err := bus.Publish(context.Background(), Event{})
+	err := bus.Publish(Event{})
 
 	bus.Wait()
 
@@ -801,7 +801,7 @@ func TestExec_Singleton(t *testing.T) {
 	var providerExecuted, handlerExecuted int
 
 	bus := New()
-	bus.ProvideSingleton(func() (GetIntService, error) {
+	bus.ProvideOnce(func() (GetIntService, error) {
 		providerExecuted++
 		return &GetIntServiceImpl{}, nil
 	})
@@ -835,7 +835,7 @@ func TestExec_Concurrent(t *testing.T) {
 	var providerExecuted int
 
 	bus := New()
-	bus.ProvideSingleton(func() (GetIntService, error) {
+	bus.ProvideOnce(func() (GetIntService, error) {
 		providerExecuted++
 		return &GetIntServiceImpl{}, nil
 	})

@@ -41,8 +41,7 @@ func Increment(ctx context.Context, cmd *IncrementCommand, counter Counter, bus 
 	oldValue := counter.Value()
 	newValue := counter.Increment()
 
-	bus.Publish(
-		context.Background(),
+	_ = bus.Publish(
 		CounterUpdatedEvent{
 			Timestamp: time.Now().Unix(),
 			OldValue:  oldValue,
@@ -68,7 +67,7 @@ func CounterUpdated(ctx context.Context, evt CounterUpdatedEvent) {
 func ExampleVan() {
 	bus := van.New()
 
-	bus.ProvideSingleton(ProvideCounter)
+	bus.ProvideOnce(ProvideCounter)
 	bus.Handle(IncrementCommand{}, Increment)
 	bus.Subscribe(CounterUpdatedEvent{}, CounterUpdated)
 

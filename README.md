@@ -1,36 +1,47 @@
 # 🚐 Van
 
-(Yet another?) reflection-based in-app command/event bus with dependency-injection.
+(Yet another?) application-level reflection-based command/event bus with
+automatic dependency-injection.
 
 ## Status
 
 BETA. There still might be breaking API changes in future versions.
+
+## Idea
+
+Van introduces some variation of the CQS pattern, combined with automatic dependency
+injection, making the application components low-coupled, highly testable and maintainable.
 
 ## Commands
 
  * Command is a signal to the application to perform some action.
  * Commands are simple DTO objects without behaviour.
  * Commands are processed with command handlers.
- * Each command can be associated with only one handler.
+ * Each command can be associated with one handler.
  * Commands are processed synchronously (request-response).
- * There are no return values but handlers can modify the command struct to
-   provide some state back to the caller.
+ * Commands are mutable allowing handlers to set the return values.
 
 ```go
-// define command struct
+// Define command struct
 type PrintHelloCommand struct {
 	Name string
 }
 
-// register command handler
-func PrintHello(ctx context.Context, cmd *PrintHelloCommand) error {
-	log.Printf("Hello, %s!", cmd.Name)
+func (cmd *PrintHelloCommand) Handle(ctx *context.Context)
+
+// Register command handler
+func PrintHello(ctx *context.Context, cmd *PrintHelloCommand, logger Logger) error {
+    logger.Printf("Hello, %s!", cmd.Name)
+    return nil
 }
+
 bus.Handle(PrintHelloCommand{}, PrintHello)
 
 // send command to the bus
 ctx := context.Background()
+
 cmd := &PrintHelloCommand{Name: "Harry"}
+
 if err := bus.Invoke(ctx, cmd); err != nil {
 	log.Printf("[ERROR] failed to invoke PrintHelloCommand: %v", err)
 }
@@ -42,9 +53,6 @@ if err := bus.Invoke(ctx, cmd); err != nil {
  * Events are simple DTO objects without behaviour.
  * Events are immutable and cannot be modified by listeners.
  * Each event may have zero to infinity number of listeners.
- * In the case of multiple listeners, they are executed concurrently, but not
-   asynchronously. In other words, `bus.Publish()` runs each event handler in a
-   separate goroutine but waits for them to finish the execution before returning.
 
 ```go
 // define event struct
@@ -54,18 +62,17 @@ type OrderCreatedEvent struct {
 }
 
 // register event listener
-func OrderCreated(ctx *context.Context, event OrderCreatedEvent) {
-	log.Printf("[INFO] order %d created at %d", event.OrderID, event.Ts)
-}
-bus.Subscribe(OrderCreatedEvent{}, OrderCreated)
+bus.Subscribe(OrderCreatedEvent{}, func(ctx context.Context, event OrderCreatedEvent) {
+    log.Printf("[INFO] order %d created at %d", event.OrderID, event.Ts)
+})
 
 // publish event to the bus
 event := OrderCreatedEvent{
 	OrderID: 134,
 	Ts:      time.Now().Unix(),
 }
-ctx := context.Background()
-if err := bus.Publish(ctx, event); err != nil {
+
+if err := bus.Publish(event); err != nil {
 	log.Printf("[ERROR] failed to publish OrderCreatedEvent: %v", err)
 }
 ```
@@ -77,13 +84,15 @@ if err := bus.Publish(ctx, event); err != nil {
  * Handlers may have dependencies provided in extra arguments as interfaces.
  * Command handler can return an error which will propagated to the caller as is.
  * Event handlers cannot return any values, nor can they propagate any state back
-   to the caller, including errors. Therefore there is no indication of whether
+   to the caller, including errors. Therefore, there is no indication of whether
    the event has been processed successfully.
+ * Command handlers are synchronous. Event handlers are executed in the background
+   (the order of execution is not specified).
 
 ```go
 func PrintHelloWorld(ctx context.Context, cmd *PrintHelloWorldCommand, logger Logger, bus van.Van) error {
 	logger.Print("Hello, World!")
-	if err := bus.Publish(ctx, HelloWorldPrintedEvent{}); err != nil {
+	if err := bus.Publish(HelloWorldPrintedEvent{}); err != nil {
 		logger.Printf("failed to publish an event: %v", err)
 		return err
 	}
@@ -100,30 +109,39 @@ func HelloWorldPrinted(ctx context.Context, event HelloWorldPrintedEvent, logger
  * Provider is essentially a constructor of an arbitrary type.
  * Provider should return an interface and an error.
  * Providers can depend on other providers.
- * Providers can be either transitive (executed every time the dependency is requested), or signletons.
- * There is no such thing as "optional dependency", provider must return an error if it can’t provide one.
+ * Providers can be either regular constructors (executed every time the dependency
+   is requested), or singletons.
+ * Regular providers can depend on `context.Context`. Singleton providers cannot,
+   nor can they depend on providers that use context as a dependency.
+ * There is no such thing as "optional dependency", provider must return an error
+   if it can’t provide one.
 
 ```go
 type Logger interface {
 	Printf(string, ...interface{})
 }
 
-// singleton provider is guaranteed to be executed not more than once
-bus.ProvideSingleton(func() (Logger, error) {
+// Singleton provider is guaranteed to be executed only once.
+func ProvideLogger() (Logger, error) {
 	flags := log.LstdFlags | log.LUTC | log.Lshortfile
 	return log.New(os.Stdout, "", flags)
-})
+}
 
-// transitive provider is executed every time the dependency is requested
-// here we initialize new database connection every time UserRepo is used as a dependency
-func newUserRepoProvider(db *sql.DB) interface{} {
+// Regular provider is executed every time the dependency is requested.
+func newUserRepoProvider(db *sql.DB) van.ProviderFunc {
 	return func(ctx context.Context, logger Logger) (UserRepo, error) {
-		conn := db.Conn(ctx) // TODO: make sure the context is cancelled at the end of the request lifespan
-		return newPostgresUserRepo(conn, logger)
+		logger.Printf("initializing new user repository")
+		return newPostgresUserRepo(db.Conn(ctx), logger)
 	}
 }
-db := sql.Open("postgres", "...")
-bus.Provide(newUserRepoProvider(db))
+
+func main() {
+   db := sql.Open("postgres", "...")
+
+   bus.ProvideSingleton(ProvideLogger)
+
+   bus.Provide(newUserRepoProvider(db))
+}
 ```
 
 ## Dependency Injection
@@ -135,7 +153,7 @@ type and there should be a registered dependency provider for the given type.
 ```go
 func SayHello(ctx context.Context, cmd *SayHelloCommand, logger Logger, bus van.Van) error {
 	logger.Print("Hello, World!")
-	bus.Publish(ctx, HelloWorldPrintedEvent{})
+	bus.Publish(HelloWorldPrintedEvent{})
 	return nil
 }
 ```
@@ -145,10 +163,9 @@ possible to pack them into a struct. Each field of that struct still needs to be
 of an interface type. You can combine any number of such structs in the function
 arguments.
 
-
 ```go
 func DependencySet struct {
-	Bus    van.Van
+	Bus    *van.Van
 	Logger Logger
 }
 
@@ -158,8 +175,6 @@ func HelloWorldPrinted(ctx context.Context, event HelloWorldPrintedEvent, deps D
 ```
 
 ## Is it fast?
-
-*All benhmakrs code is available in the [bus_bench_test.go](bus_bench_test.go) file.*
 
 Although it tries to do most of the heavy lifting during the start-up, it’s still
 considered to be slow compared to "native" code due to reflection magic under
@@ -179,7 +194,7 @@ BenchmarkFuncCall_StaticHeap-12            	54928545	        20.68 ns/op	      1
 BenchmarkFuncCall_Reflection-12            	 4555992	       248.2 ns/op	      32 B/op	       2 allocs/op
 ```
 
-If we compare relativeley large dependency graph constructed statically with
+If we compare a relatively large dependency graph constructed statically with
 the one constructed dynamically using dependency injection, the difference will
 be at about 40 to 50 times:
 
@@ -188,7 +203,7 @@ BenchmarkBus_LargeGraphTransitive-12    	   82728	     12986 ns/op	    2816 B/op
 BenchmarkNoBus_LargeGraph-12               	 3522093	       336.5 ns/op	     224 B/op	      28 allocs/op
 ```
 
-A general recommendation is not to forget using singleons whenever possible
+A general recommendation is not to forget using singletons whenever possible
 to reduce the number of dynamic reflection calls to the providers:
 
 ```
@@ -204,17 +219,17 @@ database round trips and JSON serialization.
 So, the impact of the bus on the response time of a typical go service is
 estimated at around 1% at worst.
 
-## Is it safe?
+## Type Safety
 
-Reflection is often risky. Because there is no compile-time type checking, the
-application may panic at run time if an invalid type sneaks in.
+Even though there is a lot of reflection under the hood, Van tries to do most of
+the type checking at the startup. That includes checking the types of the
+dependencies and the return values of the providers. It does not, however, 
+prevent you from passing a wrong type to the `Invoke` method, meaning that you 
+can still get a type error in run time (not panicking, though).
 
-Van tries to minimize that risk by doing run-time type checking of the arguments
-and the return values of the dependency graph at the startup. If something goes
-wrong with the types, the app will crash right away, not after days of running
-in prod.
+```go
 
-## How do I return a value from a command handler?
+## Return Values
 
 There are no return values, but this can be handled with the command type itself:
 
@@ -230,18 +245,21 @@ func Sum(ctx context.Context, cmd *SumCommand) error {
 	return nil
 }
 
-ctx := context.Background()
-cmd := &SumCommand{A: 1, B: 2}
-if err := bus.Invoke(ctx, cmd); err != nil {
+cmd := &SumCommand{
+	A: 1,
+	B: 2,
+}
+
+if err := bus.Invoke(context.TODO(), cmd); err != nil {
 	panic(err)
 }
 
-println(cmd.Result) // 3
+fmt.Println(cmd.Result) // 3
 ```
 
-## Can I have multiple providers for the same type?
+## Multiple Providers for the Same Type
 
-Not really, but you can create a type alias:
+You can achieve this by defining a new type for the same interface:
 
 ```go
 type Logger interface {

@@ -20,8 +20,8 @@ func validateProviderSignature(t reflect.Type) error {
 	switch {
 	case t.Kind() != reflect.Func:
 		return fmt.Errorf("provider must be a function, got %s", t.String())
-	case t.NumIn() > MaxArgs:
-		return fmt.Errorf("provider must have at most %d arguments, got %d", MaxArgs, t.NumIn())
+	case t.NumIn() > maxArgs:
+		return fmt.Errorf("provider must have at most %d arguments, got %d", maxArgs, t.NumIn())
 	case t.NumOut() != 2:
 		return fmt.Errorf("provider must have two return values, got %d", t.NumOut())
 	case t.Out(0).Kind() != reflect.Interface:
@@ -43,8 +43,8 @@ func validateHandlerSignature(t reflect.Type) error {
 		return fmt.Errorf("handler must be a function, got %s", t.String())
 	case t.NumIn() < 2:
 		return fmt.Errorf("handler must have at least 2 arguments, got %s", fmt.Sprint(t.NumIn()))
-	case t.NumIn() > MaxArgs:
-		return fmt.Errorf("handler must have at most %d arguments, got %d", MaxArgs, t.NumIn())
+	case t.NumIn() > maxArgs:
+		return fmt.Errorf("handler must have at most %d arguments, got %d", maxArgs, t.NumIn())
 	case t.In(0) != typeContext:
 		return fmt.Errorf("handler's first argument must be context.Context, got %s", t.In(0).String())
 	case !isStructPtr(t.In(1)):
@@ -68,8 +68,8 @@ func validateListenerSignature(t reflect.Type) error {
 		return fmt.Errorf("handler must be a function, got %s", t.String())
 	case t.NumIn() < 2:
 		return fmt.Errorf("handler must have at least 2 arguments, got %s", fmt.Sprint(t.NumIn()))
-	case t.NumIn() > MaxArgs:
-		return fmt.Errorf("handler must have at most %d arguments, got %d", MaxArgs, t.NumIn())
+	case t.NumIn() > maxArgs:
+		return fmt.Errorf("handler must have at most %d arguments, got %d", maxArgs, t.NumIn())
 	case t.In(0) != typeContext:
 		return fmt.Errorf("handler's first argument must be context.Context, got %s", t.In(0).String())
 	case t.In(1).Kind() != reflect.Struct:
@@ -89,8 +89,8 @@ func validateExecLambdaSignature(t reflect.Type) error {
 	switch {
 	case t.Kind() != reflect.Func:
 		return fmt.Errorf("function must be a function, got %s", t.String())
-	case t.NumIn() > MaxArgs:
-		return fmt.Errorf("function must have at most %d arguments, got %d", MaxArgs, t.NumIn())
+	case t.NumIn() > maxArgs:
+		return fmt.Errorf("function must have at most %d arguments, got %d", maxArgs, t.NumIn())
 	case t.NumOut() != 1:
 		return fmt.Errorf("function must have one return value, got %s", fmt.Sprint(t.NumOut()))
 	case !t.Out(0).Implements(typeError):
